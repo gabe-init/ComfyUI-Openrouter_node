@@ -2,7 +2,7 @@
 
 A custom node for ComfyUI that allows you to interact with OpenRouter's chat/completion API, providing access to a wide range of LLM models including GPT-4, Claude, Llama, Mistral, and more.
 
-![OpenRouter Node Example](https://i.imgur.com/placeholder.png)
+![OpenRouter Node Example](openrouter_node_example.png)
 
 ## Features
 
