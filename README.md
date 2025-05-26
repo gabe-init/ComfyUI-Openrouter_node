@@ -18,7 +18,7 @@ A custom node for ComfyUI that allows you to interact with OpenRouter's chat/com
 1. Clone this repository into your ComfyUI custom_nodes folder:
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/yourusername/ComfyUI-Openrouter_node
+git clone https://github.com/gabe-init/ComfyUI-Openrouter_node
 ```
 
 2. Install the required dependencies:
