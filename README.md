@@ -118,5 +118,5 @@ SOFTWARE.
 
 ## Credits
 
-- [OpenRouter](https://openrouter.ai/) for providing the API
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for the amazing stable diffusion interface
+- [OpenRouter](https://openrouter.ai/) 
+- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 
