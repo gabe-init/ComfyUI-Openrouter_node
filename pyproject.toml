@@ -1,0 +1,15 @@
+[project]
+name = "openrouter_node"
+description = "A custom node for ComfyUI that allows you to interact with OpenRouter's chat/completion API, providing access to a wide range of LLM models including GPT-4, Claude, Llama, Mistral, and more."
+version = "1.0.0"
+license = {file = "LICENSE"}
+dependencies = ["requests", "tiktoken", "Pillow"]
+
+[project.urls]
+Repository = "https://github.com/gabe-init/ComfyUI-Openrouter_node"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI-Openrouter_node"
+Icon = ""
