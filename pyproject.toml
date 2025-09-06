@@ -1,7 +1,7 @@
 [project]
 name = "openrouter_node"
-description = "A custom node for ComfyUI that allows you to interact with OpenRouter's chat/completion API, providing access to a wide range of LLM models including GPT-4, Claude, Llama, Mistral, and more."
-version = "1.0.1"
+description = "A custom node for ComfyUI that allows you to interact with OpenRouter's chat/completion API, providing access to a wide range of models."
+version = "1.0.2"
 license = {file = "LICENSE"}
 dependencies = ["requests", "tiktoken", "Pillow"]
 
