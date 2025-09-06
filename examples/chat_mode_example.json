@@ -1,0 +1,130 @@
+{
+  "last_node_id": 3,
+  "last_link_id": 2,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "OpenRouterNode",
+      "pos": [400, 200],
+      "size": [400, 400],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "Output",
+          "type": "STRING",
+          "links": [1],
+          "shape": 3,
+          "slot_index": 0
+        },
+        {
+          "name": "Stats",
+          "type": "STRING",
+          "links": [2],
+          "shape": 3,
+          "slot_index": 1
+        },
+        {
+          "name": "Credits",
+          "type": "STRING",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "OpenRouterNode"
+      },
+      "widgets_values": [
+        "",
+        "You are a helpful AI assistant. Please provide thoughtful and accurate responses.",
+        "Hello! Let's have a conversation.",
+        "openai/gpt-3.5-turbo",
+        false,
+        true,
+        false,
+        1,
+        "auto",
+        true
+      ]
+    },
+    {
+      "id": 2,
+      "type": "ShowText|pysssss",
+      "pos": [850, 200],
+      "size": [400, 200],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": null,
+          "shape": 6
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": ["", ""]
+    },
+    {
+      "id": 3,
+      "type": "ShowText|pysssss",
+      "pos": [850, 450],
+      "size": [400, 100],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": null,
+          "shape": 6
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": ["", ""]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "STRING"],
+    [2, 1, 1, 3, 0, "STRING"]
+  ],
+  "groups": [
+    {
+      "title": "Chat Mode Example",
+      "bounding": [380, 120, 900, 500],
+      "color": "#3f789e",
+      "font_size": 24,
+      "locked": false
+    }
+  ],
+  "config": {},
+  "extra": {
+    "workflow": {
+      "title": "OpenRouter Chat Mode Example",
+      "description": "This workflow demonstrates the chat mode feature. When chat mode is enabled, conversations are automatically saved and context is maintained across messages. Sessions expire after 1 hour of inactivity."
+    }
+  },
+  "version": 0.4
+}
