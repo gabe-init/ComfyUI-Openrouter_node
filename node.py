@@ -56,7 +56,24 @@ class OpenRouterNode:
                 "web_search": ("BOOLEAN", {"default": False}),
                 "cheapest": ("BOOLEAN", {"default": True}),
                 "fastest": ("BOOLEAN", {"default": False}),
-                "image_resolution": (["1K", "2K", "4K"], {"default": "1K"}),
+                "aspect_ratio": ([
+                    "auto",
+                    "1:1 (1024x1024)",
+                    "2:3 (832x1248)",
+                    "3:2 (1248x832)",
+                    "3:4 (864x1184)",
+                    "4:3 (1184x864)",
+                    "4:5 (896x1152)",
+                    "5:4 (1152x896)",
+                    "9:16 (768x1344)",
+                    "16:9 (1344x768)",
+                    "21:9 (1536x672)",
+                    "1:4 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
+                    "4:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
+                    "1:8 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
+                    "8:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
+                ], {"default": "auto"}),
+                "image_resolution": (["0.5K (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)", "1K", "2K", "4K"], {"default": "1K"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
                     "default": 1.0,
@@ -157,7 +174,7 @@ class OpenRouterNode:
 
     def generate_response(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
-                         image_resolution="1K", seed=0,
+                         aspect_ratio="auto", image_resolution="1K", seed=0,
                          pdf_data=None, user_message_input=None, **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
@@ -314,7 +331,12 @@ class OpenRouterNode:
 
         # Always enable image+text modalities and send image_config
         data["modalities"] = ["image", "text"]
-        data["image_config"] = {"image_size": image_resolution}
+        # Extract size value from dropdown label (e.g. "0.5K (flash only)" -> "0.5K")
+        image_config = {"image_size": image_resolution.split(" ")[0]}
+        if aspect_ratio != "auto":
+            # Extract ratio from dropdown label (e.g. "16:9 (1344x768)" -> "16:9")
+            image_config["aspect_ratio"] = aspect_ratio.split(" ")[0]
+        data["image_config"] = image_config
         print(f"Payload: modalities={data['modalities']}, image_config={data['image_config']}, model={modified_model}")
 
         # Add plugins if a specific PDF engine is selected
@@ -575,7 +597,7 @@ class OpenRouterNode:
     @classmethod
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
-                   image_resolution="1K", seed=0,
+                   aspect_ratio="auto", image_resolution="1K", seed=0,
                    pdf_data=None, user_message_input=None, **kwargs):
         """
         Check if any input that affects the output has changed.
@@ -630,7 +652,7 @@ class OpenRouterNode:
         # Use primitive types where possible for reliable hashing/comparison
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
-                image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)
+                aspect_ratio, image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
