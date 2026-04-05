@@ -13,6 +13,13 @@ Multiple image inputs are supported. Make sure the model you are using supports 
 
 ## Updates
 
+### 4/5/2026 - Seed, Resolution, Aspect Ratio, Temperature Fix
+- Added **seed** input
+- Added **image_resolution** dropdown (1K, 2K, 4K)
+- Added **aspect_ratio** dropdown with all supported ratios, including Nano Banana 2 only extended ratios (1:4, 4:1, 1:8, 8:1)
+- Fixed temperature slider
+- 0.5K resolution (Nano Banana 2 only) not added - currently broken on OpenRouter's end, see [this thread](https://discord.com/channels/1091220969173028894/1484099048100073484/1484099048100073484) in the OpenRouter Discord
+
 ### 9/5/2025 - Added image support for nano-banana and future image models
 
 ### 6/12/2025 - Chat Mode

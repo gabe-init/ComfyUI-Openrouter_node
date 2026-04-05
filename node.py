@@ -73,15 +73,15 @@ class OpenRouterNode:
                     "1:8 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                     "8:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                 ], {"default": "auto"}),
-                "image_resolution": (["0.5K (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)", "1K", "2K", "4K"], {"default": "1K"}),
+                "image_resolution": (["1K", "2K", "4K"], {"default": "1K"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
                     "default": 1.0,
                     "min": 0.0,
                     "max": 2.0,
-                    "step": 0.1,
+                    "step": 0.01,
                     "display": "slider",
-                    "round": 1,
+                    "round": 0.01,
                 }),
                  "pdf_engine": (["auto", "mistral-ocr", "pdf-text"], {"default": "auto"}),
                 "chat_mode": ("BOOLEAN", {"default": False}),
@@ -311,13 +311,13 @@ class OpenRouterNode:
         # Check if model already has modifiers to avoid duplication
         if web_search and ":online" not in modified_model:
             modified_model = f"{modified_model}:online"
-        # Apply :floor/:nitro only if no other modifier is present or relevant
-        # Note: :floor and :nitro might conflict with :online. Check OpenRouter docs for precedence.
-        # Assuming :online takes precedence if specified.
-        if ":online" not in modified_model:
+        # Skip :floor/:nitro for image generation models - these modifiers can route to
+        # providers that don't support image_config (aspect_ratio, image_size, etc.)
+        is_image_model = "image" in model.lower()
+        if not is_image_model and ":online" not in modified_model:
              if cheapest and ":floor" not in modified_model:
                  modified_model = f"{modified_model}:floor"
-             elif fastest and not cheapest and ":nitro" not in modified_model: # Only apply fastest if cheapest is false
+             elif fastest and not cheapest and ":nitro" not in modified_model:
                  modified_model = f"{modified_model}:nitro"
 
 
@@ -368,6 +368,9 @@ class OpenRouterNode:
             end_time = time.time()
 
             result = response.json()
+            # Debug: print truncated response to see what OpenRouter returned
+            debug_str = json.dumps(result, default=str)
+            print(f"API response ({len(debug_str)} chars): {debug_str[:500]}")
 
             # --- Extract results and calculate stats ---
             if not result.get("choices") or not result["choices"][0].get("message"):
@@ -477,15 +480,16 @@ class OpenRouterNode:
             error_message = f"API Request Error: {str(e)}"
             if hasattr(e, 'response') and e.response is not None:
                 try:
-                    error_detail = e.response.json() # Try to get JSON error detail
+                    error_detail = e.response.json()
                     error_message += f" | Details: {error_detail}"
                 except json.JSONDecodeError:
-                    error_message += f" | Status: {e.response.status_code} | Response: {e.response.text[:200]}" # Show raw text if not JSON
+                    error_message += f" | Status: {e.response.status_code} | Response: {e.response.text[:200]}"
             else:
-                 error_message += " (Network or connection issue)" # Generic network error
-
+                 error_message += " (Network or connection issue)"
+            print(f"ERROR: {error_message}")
             return (error_message, placeholder_image, "Stats N/A due to error", "Credits N/A due to error")
-        except Exception as e: # Catch other potential errors (e.g., JSON parsing, value errors)
+        except Exception as e:
+             print(f"ERROR: Node Error: {str(e)}")
              return (f"Node Error: {str(e)}", placeholder_image, "Stats N/A due to error", "Credits N/A due to error")
 
     @staticmethod
