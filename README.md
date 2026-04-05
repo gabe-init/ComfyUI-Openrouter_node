@@ -2,15 +2,6 @@
 
 A custom node for ComfyUI that allows you to interact with OpenRouter's API, providing access to a wide range of models.  
 
-Now Supporting Nano Banana
-
-![Nano Banana Example](./nano_banana_example.jpeg)
-
-![OpenRouter Node Example](https://github.com/gabe-init/ComfyUI-Openrouter_node/blob/main/openrouter_node_example.png?raw=true)
-
-Multiple image inputs are supported. Make sure the model you are using supports multiple images to be sent at once. Thanks **@wTechArtist** for the idea!
-![Multiple Images Example](https://github.com/user-attachments/assets/09f2478c-c4f8-46f0-b79e-e4766f020119)
-
 ## Updates
 
 ### 4/5/2026 - Seed, Resolution, Aspect Ratio, Temperature Fix
@@ -19,6 +10,13 @@ Multiple image inputs are supported. Make sure the model you are using supports 
 - Added **aspect_ratio** dropdown with all supported ratios, including Nano Banana 2 only extended ratios (1:4, 4:1, 1:8, 8:1)
 - Fixed temperature slider
 - 0.5K resolution (Nano Banana 2 only) not added - currently broken on OpenRouter's end, see [this thread](https://discord.com/channels/1091220969173028894/1484099048100073484/1484099048100073484) in the OpenRouter Discord
+
+![Nano Banana Example](./nano_banana_example.jpeg)
+
+![OpenRouter Node Example](https://github.com/gabe-init/ComfyUI-Openrouter_node/blob/main/openrouter_node_example.png?raw=true)
+
+Multiple image inputs are supported. Make sure the model you are using supports multiple images to be sent at once. Thanks **@wTechArtist** for the idea!
+![Multiple Images Example](https://github.com/user-attachments/assets/09f2478c-c4f8-46f0-b79e-e4766f020119)
 
 ### 9/5/2025 - Added image support for nano-banana and future image models
 
