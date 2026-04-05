@@ -57,6 +57,8 @@ class OpenRouterNode:
                 "cheapest": ("BOOLEAN", {"default": True}),
                 "fastest": ("BOOLEAN", {"default": False}),
                 "image_generation": ("BOOLEAN", {"default": False}),
+                "image_size": (["1K", "2K", "4K"], {"default": "1K"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
                     "default": 1.0,
                     "min": 0.0,
@@ -156,7 +158,8 @@ class OpenRouterNode:
 
     def generate_response(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
-                         image_generation=False, pdf_data=None, user_message_input=None, **kwargs):
+                         image_generation=False, image_size="1K", seed=0,
+                         pdf_data=None, user_message_input=None, **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
         Handles text, optional image, and optional PDF inputs.
@@ -306,14 +309,15 @@ class OpenRouterNode:
         data = {
             "model": modified_model,
             "messages": messages,
-            "temperature": validated_temp
-            # Omitting max_tokens lets the model decide (usually preferred)
+            "temperature": validated_temp,
+            "seed": seed
         }
-        
+
         # Only add modalities parameter if explicitly requested by user
         # This prevents "Multi-modal output is not supported" errors on text-only models
         if image_generation:
             data["modalities"] = ["image", "text"]
+            data["image_config"] = {"image_size": image_size}
             print(f"Image generation enabled by user setting")
 
         # Add plugins if a specific PDF engine is selected
@@ -574,7 +578,8 @@ class OpenRouterNode:
     @classmethod
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
-                   image_generation=False, pdf_data=None, user_message_input=None, **kwargs):
+                   image_generation=False, image_size="1K", seed=0,
+                   pdf_data=None, user_message_input=None, **kwargs):
         """
         Check if any input that affects the output has changed.
         Includes hashing image and PDF data.
@@ -628,7 +633,7 @@ class OpenRouterNode:
         # Use primitive types where possible for reliable hashing/comparison
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
-                image_generation, tuple(image_hashes), pdf_hash, user_message_input)
+                image_generation, image_size, seed, tuple(image_hashes), pdf_hash, user_message_input)
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
