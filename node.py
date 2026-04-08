@@ -329,15 +329,19 @@ class OpenRouterNode:
             "seed": seed
         }
 
-        # Always enable image+text modalities and send image_config
-        data["modalities"] = ["image", "text"]
-        # Extract size value from dropdown label (e.g. "0.5K (flash only)" -> "0.5K")
-        image_config = {"image_size": image_resolution.split(" ")[0]}
-        if aspect_ratio != "auto":
-            # Extract ratio from dropdown label (e.g. "16:9 (1344x768)" -> "16:9")
-            image_config["aspect_ratio"] = aspect_ratio.split(" ")[0]
-        data["image_config"] = image_config
-        print(f"Payload: modalities={data['modalities']}, image_config={data['image_config']}, model={modified_model}")
+        # Only request image modality for image-capable models. Text-only models
+        # (e.g. hermes, gemini-2.5-flash) return 404 if asked to output images.
+        if is_image_model:
+            data["modalities"] = ["image", "text"]
+            # Extract size value from dropdown label (e.g. "0.5K (flash only)" -> "0.5K")
+            image_config = {"image_size": image_resolution.split(" ")[0]}
+            if aspect_ratio != "auto":
+                # Extract ratio from dropdown label (e.g. "16:9 (1344x768)" -> "16:9")
+                image_config["aspect_ratio"] = aspect_ratio.split(" ")[0]
+            data["image_config"] = image_config
+            print(f"Payload: modalities={data['modalities']}, image_config={data['image_config']}, model={modified_model}")
+        else:
+            print(f"Payload: text-only, model={modified_model}")
 
         # Add plugins if a specific PDF engine is selected
         if pdf_engine != "auto":
