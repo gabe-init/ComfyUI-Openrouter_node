@@ -311,10 +311,7 @@ class OpenRouterNode:
         # Check if model already has modifiers to avoid duplication
         if web_search and ":online" not in modified_model:
             modified_model = f"{modified_model}:online"
-        # Skip :floor/:nitro for image generation models - these modifiers can route to
-        # providers that don't support image_config (aspect_ratio, image_size, etc.)
-        is_image_model = "image" in model.lower()
-        if not is_image_model and ":online" not in modified_model:
+        if ":online" not in modified_model:
              if cheapest and ":floor" not in modified_model:
                  modified_model = f"{modified_model}:floor"
              elif fastest and not cheapest and ":nitro" not in modified_model:
@@ -329,19 +326,7 @@ class OpenRouterNode:
             "seed": seed
         }
 
-        # Only request image modality for image-capable models. Text-only models
-        # (e.g. hermes, gemini-2.5-flash) return 404 if asked to output images.
-        if is_image_model:
-            data["modalities"] = ["image", "text"]
-            # Extract size value from dropdown label (e.g. "0.5K (flash only)" -> "0.5K")
-            image_config = {"image_size": image_resolution.split(" ")[0]}
-            if aspect_ratio != "auto":
-                # Extract ratio from dropdown label (e.g. "16:9 (1344x768)" -> "16:9")
-                image_config["aspect_ratio"] = aspect_ratio.split(" ")[0]
-            data["image_config"] = image_config
-            print(f"Payload: modalities={data['modalities']}, image_config={data['image_config']}, model={modified_model}")
-        else:
-            print(f"Payload: text-only, model={modified_model}")
+        print(f"Payload: model={modified_model}")
 
         # Add plugins if a specific PDF engine is selected
         if pdf_engine != "auto":
