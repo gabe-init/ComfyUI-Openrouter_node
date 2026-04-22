@@ -3,7 +3,7 @@ import hashlib
 import io
 import json
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import numpy as np
@@ -159,7 +159,7 @@ class OpenRouterVideoNode:
         return f"data:image/png;base64,{encoded}"
 
     @staticmethod
-    def _provider_from_json(provider_json: str) -> Dict[str, Any] | None:
+    def _provider_from_json(provider_json: str) -> Optional[Dict[str, Any]]:
         provider_json = provider_json.strip()
         if not provider_json:
             return None
@@ -209,13 +209,13 @@ class OpenRouterVideoNode:
         return OpenRouterCatalog.infer_video_supported_modes(model_data)
 
     @staticmethod
-    def _normalize_duration_input(duration: Any) -> int | None:
+    def _normalize_duration_input(duration: Any) -> Optional[int]:
         if duration in (None, "", "auto", 0, "0"):
             return None
         return int(duration)
 
     @staticmethod
-    def _estimated_cost_display_text(estimated_cost: Dict[str, Any] | None) -> str | None:
+    def _estimated_cost_display_text(estimated_cost: Optional[Dict[str, Any]]) -> Optional[str]:
         if not estimated_cost:
             return None
         display_text = estimated_cost.get("display_text")
@@ -224,7 +224,7 @@ class OpenRouterVideoNode:
         return None
 
     @staticmethod
-    def _actual_cost_display_text(poll_data: Dict[str, Any]) -> str | None:
+    def _actual_cost_display_text(poll_data: Dict[str, Any]) -> Optional[str]:
         usage = poll_data.get("usage")
         if isinstance(usage, dict):
             cost = usage.get("cost")
@@ -420,7 +420,7 @@ class OpenRouterVideoNode:
         cls,
         headers: Dict[str, str],
         job_id: str,
-        polling_url: str | None,
+        polling_url: Optional[str],
         poll_interval_seconds: int,
         timeout_seconds: int,
     ) -> Dict[str, Any]:
@@ -450,7 +450,7 @@ class OpenRouterVideoNode:
         cls,
         headers: Dict[str, str],
         job_id: str,
-        polling_url: str | None,
+        polling_url: Optional[str],
     ) -> Dict[str, Any]:
         url = polling_url or f"{cls.API_BASE}/videos/{job_id}"
         response = requests.get(url, headers=headers, timeout=60)
@@ -523,7 +523,7 @@ class OpenRouterVideoNode:
         cls,
         headers: Dict[str, str],
         job_id: str,
-        polling_url: str | None,
+        polling_url: Optional[str],
         poll_data: Dict[str, Any],
         poll_interval_seconds: int,
     ) -> bytes:

@@ -1,6 +1,6 @@
 import math
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -12,9 +12,9 @@ class OpenRouterCatalog:
     VIDEO_RESOLUTION_ORDER = ["480p", "720p", "1080p", "1K", "2K", "4K"]
     VIDEO_ASPECT_RATIO_ORDER = ["1:1", "3:4", "4:3", "9:16", "16:9", "9:21", "21:9"]
 
-    _all_models_cache: List[Dict[str, Any]] | None = None
+    _all_models_cache: Optional[List[Dict[str, Any]]] = None
     _all_models_timestamp = 0.0
-    _video_models_cache: List[Dict[str, Any]] | None = None
+    _video_models_cache: Optional[List[Dict[str, Any]]] = None
     _video_models_timestamp = 0.0
 
     FALLBACK_CHAT_MODELS = [
@@ -212,14 +212,14 @@ class OpenRouterCatalog:
         )
 
     @staticmethod
-    def _parse_price(value: Any) -> float | None:
+    def _parse_price(value: Any) -> Optional[float]:
         try:
             return float(value)
         except (TypeError, ValueError):
             return None
 
     @staticmethod
-    def _parse_video_size(size: str) -> tuple[int, int] | None:
+    def _parse_video_size(size: str) -> Optional[Tuple[int, int]]:
         if not isinstance(size, str) or "x" not in size:
             return None
         width_text, height_text = size.lower().split("x", 1)
@@ -234,7 +234,7 @@ class OpenRouterCatalog:
         return f"{width // divisor}:{height // divisor}"
 
     @classmethod
-    def _size_matches_resolution(cls, size: str, resolution: str | None) -> bool:
+    def _size_matches_resolution(cls, size: str, resolution: Optional[str]) -> bool:
         if resolution in (None, "", "auto"):
             return True
 
@@ -258,7 +258,7 @@ class OpenRouterCatalog:
         return True
 
     @classmethod
-    def _size_matches_aspect_ratio(cls, size: str, aspect_ratio: str | None) -> bool:
+    def _size_matches_aspect_ratio(cls, size: str, aspect_ratio: Optional[str]) -> bool:
         if aspect_ratio in (None, "", "auto"):
             return True
 
@@ -273,8 +273,8 @@ class OpenRouterCatalog:
     def _matching_supported_sizes(
         cls,
         model: Dict[str, Any],
-        resolution: str | None,
-        aspect_ratio: str | None,
+        resolution: Optional[str],
+        aspect_ratio: Optional[str],
     ) -> List[str]:
         matches = []
         for size in cls._ordered_video_strings(model.get("supported_sizes")):
@@ -286,7 +286,7 @@ class OpenRouterCatalog:
         return matches
 
     @staticmethod
-    def _resolution_suffixes(resolution: str | None) -> List[str]:
+    def _resolution_suffixes(resolution: Optional[str]) -> List[str]:
         if resolution in (None, "", "auto"):
             return []
 
@@ -307,7 +307,7 @@ class OpenRouterCatalog:
         model: Dict[str, Any],
         pricing_skus: Dict[str, Any],
         payload: Dict[str, Any],
-    ) -> Dict[str, Any] | None:
+    ) -> Optional[Dict[str, Any]]:
         duration = payload.get("duration")
         if not isinstance(duration, int):
             return None
@@ -369,7 +369,7 @@ class OpenRouterCatalog:
         pricing_skus: Dict[str, Any],
         payload: Dict[str, Any],
         mode: str,
-    ) -> Dict[str, Any] | None:
+    ) -> Optional[Dict[str, Any]]:
         duration = payload.get("duration")
         if not isinstance(duration, int):
             return None
@@ -419,7 +419,7 @@ class OpenRouterCatalog:
         model: Dict[str, Any],
         pricing_skus: Dict[str, Any],
         payload: Dict[str, Any],
-    ) -> Dict[str, Any] | None:
+    ) -> Optional[Dict[str, Any]]:
         duration = payload.get("duration")
         if not isinstance(duration, int):
             return None
@@ -485,7 +485,7 @@ class OpenRouterCatalog:
         model: Dict[str, Any],
         payload: Dict[str, Any],
         mode: str,
-    ) -> Dict[str, Any] | None:
+    ) -> Optional[Dict[str, Any]]:
         pricing_skus = model.get("pricing_skus") or {}
         if not isinstance(pricing_skus, dict) or not pricing_skus:
             return None

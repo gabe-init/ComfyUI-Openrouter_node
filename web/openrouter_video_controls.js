@@ -209,8 +209,8 @@ function estimateTokenPricedCost(modelCapabilities, settings) {
     return {
         display: formatCostDisplay(Math.min(...costs), Math.max(...costs)),
         note: costs.length > 1
-            ? "Estimation sur plusieurs tailles publiees. Choisis ratio + resolution pour affiner."
-            : "Estimation basee sur la taille publiee correspondant aux selections.",
+            ? "Estimate spans multiple published sizes. Select both aspect ratio and resolution to narrow it down."
+            : "Estimate is based on the published size matching the current selection.",
     };
 }
 
@@ -246,8 +246,8 @@ function estimateModeResolutionCost(modelCapabilities, settings) {
     return {
         display: formatCostDisplay(Math.min(...costs), Math.max(...costs)),
         note: costs.length > 1
-            ? "Estimation sur plusieurs resolutions possibles pour ce mode."
-            : "Estimation basee sur le mode et la resolution selectionnes.",
+            ? "Estimate spans multiple possible resolutions for this mode."
+            : "Estimate is based on the selected mode and resolution.",
     };
 }
 
@@ -298,8 +298,8 @@ function estimateDurationCost(modelCapabilities, settings) {
     return {
         display: formatCostDisplay(Math.min(...costs), Math.max(...costs)),
         note: costs.length > 1
-            ? "Estimation sur plusieurs resolutions publiees pour ce modele."
-            : "Estimation basee sur les SKUs publics du modele.",
+            ? "Estimate spans multiple published resolutions for this model."
+            : "Estimate is based on the model's public pricing SKUs.",
     };
 }
 
@@ -309,7 +309,7 @@ function estimateVideoCost(modelCapabilities, settings) {
     if (!pricingKeys.length) {
         return {
             display: "N/A",
-            note: "Tarification publique indisponible pour ce modele.",
+            note: "Public pricing data is not available for this model.",
         };
     }
 
@@ -317,7 +317,7 @@ function estimateVideoCost(modelCapabilities, settings) {
         return estimateModeResolutionCost(modelCapabilities, settings)
             ?? {
                 display: "N/A",
-                note: "Selection insuffisante pour calculer le cout. Renseigne surtout la duree et la resolution.",
+                note: "Not enough information to estimate cost yet. Duration and resolution matter most here.",
             };
     }
 
@@ -325,14 +325,14 @@ function estimateVideoCost(modelCapabilities, settings) {
         return estimateTokenPricedCost(modelCapabilities, settings)
             ?? {
                 display: "N/A",
-                note: "Selection insuffisante pour calculer le cout. Renseigne surtout la duree, la resolution et le ratio.",
+                note: "Not enough information to estimate cost yet. Duration, resolution, and aspect ratio matter most here.",
             };
     }
 
     return estimateDurationCost(modelCapabilities, settings)
         ?? {
             display: "N/A",
-            note: "Selection insuffisante pour calculer le cout. Renseigne surtout la duree.",
+            note: "Not enough information to estimate cost yet. Duration matters most here.",
         };
 }
 
