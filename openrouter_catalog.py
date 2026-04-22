@@ -19,11 +19,45 @@ class OpenRouterCatalog:
 
     FALLBACK_CHAT_MODELS = [
         "anthropic/claude-sonnet-4.5",
+        "openrouter/auto",
+        "google/gemini-3.1-flash-image-preview",
+        "google/gemini-3-pro-image-preview",
+        "google/gemini-2.5-flash-image",
         "black-forest-labs/flux.2-pro",
         "black-forest-labs/flux.2-flex",
+        "black-forest-labs/flux.2-klein-4b",
+        "black-forest-labs/flux.2-max",
+        "sourceful/riverflow-v2-fast",
+        "sourceful/riverflow-v2-pro",
+        "sourceful/riverflow-v2-fast-preview",
+        "sourceful/riverflow-v2-standard-preview",
+        "sourceful/riverflow-v2-max-preview",
+        "bytedance-seed/seedream-4.5",
+        "openai/gpt-5-image-mini",
+        "openai/gpt-5-image",
+        "openai/gpt-5.4-image-2",
         "google/gemini-2.5-pro",
         "openai/gpt-4o",
-        "google/gemini-2.5-flash-image-preview",
+    ]
+
+    FALLBACK_IMAGE_MODELS = [
+        "google/gemini-2.5-flash-image",
+        "google/gemini-3.1-flash-image-preview",
+        "google/gemini-3-pro-image-preview",
+        "openai/gpt-5-image-mini",
+        "openai/gpt-5-image",
+        "openai/gpt-5.4-image-2",
+        "black-forest-labs/flux.2-klein-4b",
+        "black-forest-labs/flux.2-flex",
+        "black-forest-labs/flux.2-pro",
+        "black-forest-labs/flux.2-max",
+        "sourceful/riverflow-v2-fast",
+        "sourceful/riverflow-v2-pro",
+        "sourceful/riverflow-v2-fast-preview",
+        "sourceful/riverflow-v2-standard-preview",
+        "sourceful/riverflow-v2-max-preview",
+        "bytedance-seed/seedream-4.5",
+        "openrouter/auto",
     ]
 
     FALLBACK_VIDEO_MODELS = [
@@ -146,11 +180,7 @@ class OpenRouterCatalog:
     def fetch_image_generation_model_ids(cls) -> List[str]:
         models = cls.fetch_all_models()
         if not models:
-            return [
-                model_id
-                for model_id in cls.FALLBACK_CHAT_MODELS
-                if "flux" in model_id or "image" in model_id
-            ]
+            return cls.FALLBACK_IMAGE_MODELS
 
         model_ids = []
         for model in models:
