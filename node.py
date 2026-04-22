@@ -705,10 +705,12 @@ class OpenRouterNode:
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
-    "OpenRouterNode": OpenRouterNode
+    "OpenRouterNode": OpenRouterNode,
+    "openrouter_node": OpenRouterNode,
 }
 
 # Node display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "OpenRouterNode": "OpenRouter Chat (Text/Multi-Image/PDF/Chat)"
+    "OpenRouterNode": "OpenRouter Chat (Text/Multi-Image/PDF/Chat)",
+    "openrouter_node": "OpenRouter Chat (Text/Multi-Image/PDF/Chat)",
 }

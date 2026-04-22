@@ -1,6 +1,6 @@
 import { app } from "../../../scripts/app.js"
 
-const NODE_ID = "OpenRouterNode";
+const NODE_IDS = new Set(["OpenRouterNode", "openrouter_node"]);
 
 function normalizeValues(values) {
     if (!Array.isArray(values)) {
@@ -118,7 +118,7 @@ function wrapWidgetCallback(node, widgetName, callback) {
 app.registerExtension({
     name: "OpenRouter.ChatControls",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_ID) {
+        if (!NODE_IDS.has(nodeData.name)) {
             return;
         }
 

@@ -15,7 +15,7 @@ const TypeSlotEvent = {
     Disconnect: false,
 };
 
-const NODE_ID = "OpenRouterNode";
+const NODE_IDS = new Set(["OpenRouterNode", "openrouter_node"]);
 const PREFIX = "image";
 const TYPE = "IMAGE";
 
@@ -23,7 +23,7 @@ app.registerExtension({
     name: 'OpenRouter.DynamicImageInputs',
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         // Skip if not our node
-        if (nodeData.name !== NODE_ID) {
+        if (!NODE_IDS.has(nodeData.name)) {
             return
         }
 
