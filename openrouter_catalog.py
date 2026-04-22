@@ -19,6 +19,8 @@ class OpenRouterCatalog:
 
     FALLBACK_CHAT_MODELS = [
         "anthropic/claude-sonnet-4.5",
+        "black-forest-labs/flux.2-pro",
+        "black-forest-labs/flux.2-flex",
         "google/gemini-2.5-pro",
         "openai/gpt-4o",
         "google/gemini-2.5-flash-image-preview",
@@ -139,6 +141,72 @@ class OpenRouterCatalog:
 
         model_ids = sorted(set(model_ids))
         return model_ids if model_ids else cls.FALLBACK_CHAT_MODELS
+
+    @classmethod
+    def fetch_image_generation_model_ids(cls) -> List[str]:
+        models = cls.fetch_all_models()
+        if not models:
+            return [
+                model_id
+                for model_id in cls.FALLBACK_CHAT_MODELS
+                if "flux" in model_id or "image" in model_id
+            ]
+
+        model_ids = []
+        for model in models:
+            model_id = model.get("id")
+            if not model_id:
+                continue
+
+            output_modalities = set(cls._extract_output_modalities(model))
+            if "image" in output_modalities:
+                model_ids.append(model_id)
+
+        model_ids = sorted(set(model_ids))
+        return model_ids if model_ids else cls.FALLBACK_CHAT_MODELS
+
+    @classmethod
+    def fetch_chat_widget_capabilities(cls) -> Dict[str, Dict[str, Any]]:
+        capabilities: Dict[str, Dict[str, Any]] = {}
+        for model in cls.fetch_all_models():
+            model_id = model.get("id")
+            if not isinstance(model_id, str):
+                continue
+
+            output_modalities = cls._extract_output_modalities(model)
+            output_modalities_set = set(output_modalities)
+            capabilities[model_id] = {
+                "output_modalities": output_modalities,
+                "supports_image_generation": "image" in output_modalities_set,
+                "supports_text_output": "text" in output_modalities_set or not output_modalities,
+                "is_image_only": output_modalities_set == {"image"},
+            }
+
+        for model_id in cls.FALLBACK_CHAT_MODELS:
+            capabilities.setdefault(
+                model_id,
+                {
+                    "output_modalities": [],
+                    "supports_image_generation": ("flux" in model_id or "image" in model_id),
+                    "supports_text_output": "flux" not in model_id,
+                    "is_image_only": "flux" in model_id,
+                },
+            )
+
+        return capabilities
+
+    @classmethod
+    def get_chat_model_by_id(cls, model_id: str) -> Dict[str, Any]:
+        for model in cls.fetch_all_models():
+            if model.get("id") == model_id:
+                return model
+
+        return {
+            "id": model_id,
+            "name": model_id,
+            "output_modalities": [],
+            "architecture": {"output_modalities": []},
+        }
 
     @classmethod
     def fetch_video_models(cls) -> List[Dict[str, Any]]:

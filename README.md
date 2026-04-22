@@ -28,6 +28,7 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 - Access to chat-capable OpenRouter models, including image-capable models exposed through the full models catalog
 - Support for multiple image inputs (up to 10 images) 
 - **NEW: Image generation support** - Generate images with models like google/gemini-2.5-flash-image-preview (Nano-Banana)
+- `image_generation_only` toggle in the main node to filter the model list down to image generation models
 - Dynamic image input visibility - additional inputs appear as you connect images
 - PDF support with multiple OCR engine options
 - Web search capability with `:online` modifier
@@ -67,6 +68,7 @@ The OpenRouter node provides a simple interface to interact with various LLMs th
 - **system_prompt**: The system prompt that sets the behavior of the LLM.
 - **user_message_box**: The user message to send to the LLM.
 - **model**: The model to use for generation. The node automatically fetches the list of available models from OpenRouter.
+- **image_generation_only**: Filters the main model list to image generation models and makes image-generation requests more predictable for image-capable models.
 - **web_search**: Enable web search capability by appending `:online` to the model ID. This costs $4 per 1000 queries and automatically uses your openrouter balance.
 - **cheapest**: Route to the cheapest provider by appending `:floor` to the model ID (enabled by default).
 - **fastest**: Route to the fastest provider by appending `:nitro` to the model ID (disabled by default).
@@ -132,7 +134,7 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 6. Run the workflow
 7. The generated image will appear in the "image" output, which you can connect to preview nodes or other image processing nodes
 
-**Note**: The node automatically detects image generation requests based on keywords like "generate", "create", "draw", "make", "produce", "design", "render", "image of", "picture of", "photo of". For image generation, use models that support image output modalities.
+**Note**: The node automatically detects image generation requests based on keywords like "generate", "create", "draw", "make", "produce", "design", "render", "image of", "picture of", "photo of". It now also sends the correct OpenRouter `modalities` payload for image-capable models, including image-only models such as Flux.
 
 ### Chat Mode
 

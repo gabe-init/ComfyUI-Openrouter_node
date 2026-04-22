@@ -53,7 +53,11 @@ class OpenRouterNode:
                     "multiline": True,
                     "default": "Hello, how are you?"
                 }),
-                "model": (cls.fetch_openrouter_models(),),
+                "model": (
+                    cls.fetch_openrouter_models(),
+                    {"chat_capabilities": OpenRouterCatalog.fetch_chat_widget_capabilities()},
+                ),
+                "image_generation_only": ("BOOLEAN", {"default": False}),
                 "web_search": ("BOOLEAN", {"default": False}),
                 "cheapest": ("BOOLEAN", {"default": True}),
                 "fastest": ("BOOLEAN", {"default": False}),
@@ -161,7 +165,7 @@ class OpenRouterNode:
              return "Error fetching credits: Could not decode JSON response."
 
     def generate_response(self, api_key, system_prompt, user_message_box, model,
-                         web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
+                         image_generation_only, web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                          aspect_ratio="auto", image_resolution="1K", seed=0,
                          pdf_data=None, user_message_input=None, **kwargs):
         """
@@ -306,6 +310,9 @@ class OpenRouterNode:
                  modified_model = f"{modified_model}:nitro"
 
 
+        selected_model = OpenRouterCatalog.get_chat_model_by_id(model)
+        model_output_modalities = set(OpenRouterCatalog._extract_output_modalities(selected_model))
+
         # --- Construct the final payload ---
         data = {
             "model": modified_model,
@@ -313,6 +320,27 @@ class OpenRouterNode:
             "temperature": validated_temp,
             "seed": seed
         }
+
+        image_generation_requested = (
+            self.is_image_generation_model(selected_model) and (
+                image_generation_only or self.looks_like_image_generation_request(user_text)
+            )
+        )
+
+        if image_generation_requested:
+            if model_output_modalities == {"image"}:
+                data["modalities"] = ["image"]
+            else:
+                data["modalities"] = ["image", "text"]
+
+            image_config = {}
+            normalized_aspect_ratio = self.normalize_aspect_ratio(aspect_ratio)
+            if normalized_aspect_ratio is not None:
+                image_config["aspect_ratio"] = normalized_aspect_ratio
+            if image_resolution:
+                image_config["image_size"] = image_resolution
+            if image_config:
+                data["image_config"] = image_config
 
         print(f"Payload: model={modified_model}")
 
@@ -434,6 +462,8 @@ class OpenRouterNode:
             )
             if pdf_engine != "auto":
                  stats_text += f", PDF Engine: {pdf_engine}"
+            if image_generation_requested:
+                 stats_text += ", Image Generation: enabled"
 
 
             # Fetch credits information AFTER the main request
@@ -574,10 +604,47 @@ class OpenRouterNode:
             # Average ~4 chars per token is a common heuristic
             return max(1, round(len(text) / 4))
 
+    @staticmethod
+    def is_image_generation_model(model_data):
+        output_modalities = set(OpenRouterCatalog._extract_output_modalities(model_data))
+        return "image" in output_modalities
+
+    @staticmethod
+    def looks_like_image_generation_request(text):
+        if not text or not isinstance(text, str):
+            return False
+
+        lowered = text.lower()
+        generation_markers = [
+            "generate",
+            "create",
+            "draw",
+            "make",
+            "produce",
+            "design",
+            "render",
+            "illustrate",
+            "image of",
+            "picture of",
+            "photo of",
+            "poster of",
+            "logo of",
+            "portrait of",
+        ]
+        return any(marker in lowered for marker in generation_markers)
+
+    @staticmethod
+    def normalize_aspect_ratio(aspect_ratio):
+        if not aspect_ratio or aspect_ratio == "auto":
+            return None
+        if "(" in aspect_ratio:
+            return aspect_ratio.split("(", 1)[0].strip()
+        return aspect_ratio.strip()
+
 
     @classmethod
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
-                   web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
+                   image_generation_only, web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                    aspect_ratio="auto", image_resolution="1K", seed=0,
                    pdf_data=None, user_message_input=None, **kwargs):
         """
@@ -632,6 +699,7 @@ class OpenRouterNode:
         # Combine all relevant inputs into a tuple for comparison
         # Use primitive types where possible for reliable hashing/comparison
         return (api_key, system_prompt, user_message_box, model,
+                image_generation_only,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
                 aspect_ratio, image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)
 
