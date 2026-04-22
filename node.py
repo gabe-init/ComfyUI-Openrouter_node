@@ -9,6 +9,7 @@ import tiktoken
 from PIL import Image
 import hashlib # Added for hashing PDF bytes in IS_CHANGED
 from .chat_manager import ChatSessionManager
+from .openrouter_catalog import OpenRouterCatalog
 
 # Define a placeholder type name for PDF data.
 # The actual input connection will accept '*' but we check the structure.
@@ -101,25 +102,12 @@ class OpenRouterNode:
     @classmethod
     def fetch_openrouter_models(cls):
         """
-        Fetches a list of model IDs from the OpenRouter API, caching them.
+        Fetches chat-capable model IDs from the OpenRouter catalog.
+        This now uses the full OpenRouter models catalog and filters down
+        to the output types that this node can already parse safely.
         """
-        current_time = time.time()
-        if (cls.models_cache is None) or (current_time - cls.last_fetch_time > cls.cache_duration):
-            url = "https://openrouter.ai/api/v1/models"
-            try:
-                response = requests.get(url)
-                response.raise_for_status()
-                models = response.json()["data"]
-                # Filter for models that support chat completions if needed, but API handles this
-                model_list = sorted([model['id'] for model in models])
-                cls.models_cache = model_list
-                cls.last_fetch_time = current_time
-            except requests.exceptions.RequestException as e:
-                print(f"Error fetching models: {e}")
-                # Provide a default list or indicate error if cache is empty
-                if cls.models_cache is None:
-                    cls.models_cache = ["error_fetching_models", "google/gemma-3-27b-it", "openai/gpt-4o"] # Example fallbacks
-        return cls.models_cache if cls.models_cache else ["error_fetching_models"] # Ensure it's never empty
+        model_list = OpenRouterCatalog.fetch_chat_model_ids()
+        return model_list if model_list else ["error_fetching_models"]
 
     def validate_temperature(self, temperature):
         """
@@ -654,5 +642,5 @@ NODE_CLASS_MAPPINGS = {
 
 # Node display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "OpenRouterNode": "OpenRouter LLM Node (Text/Multi-Image/PDF/Chat)" # Updated name
+    "OpenRouterNode": "OpenRouter Chat (Text/Multi-Image/PDF/Chat)"
 }

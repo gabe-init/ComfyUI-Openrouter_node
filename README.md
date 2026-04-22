@@ -25,7 +25,7 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 
 ## Features
 
-- Access to all models available on OpenRouter
+- Access to chat-capable OpenRouter models, including image-capable models exposed through the full models catalog
 - Support for multiple image inputs (up to 10 images) 
 - **NEW: Image generation support** - Generate images with models like google/gemini-2.5-flash-image-preview (Nano-Banana)
 - Dynamic image input visibility - additional inputs appear as you connect images
@@ -36,6 +36,9 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 - Detailed statistics on token usage and generation speed
 - Real-time OpenRouter account balance display
 - **Chat Mode** - Maintain conversation context across multiple messages with automatic session management
+- **OpenRouter Video execution node** - Ready for real async video generation with direct OpenRouter `/api/v1/videos` execution
+- **Video controls driven by the OpenRouter catalog** - mode, duration, resolution, and aspect ratio now follow the selected video model's published capabilities
+- **Estimated video cost** - the video node includes a local cost estimate directly in the node UI, plus status/metadata details based on OpenRouter's public `pricing_skus`
 
 ## Installation
 
@@ -181,6 +184,34 @@ python manage_chats.py clean -d 30
 - For cost-effective responses, enable the "cheapest" option (on by default)
 - For faster responses, disable "cheapest" and enable "fastest"
 - For web search capability, enable "web_search"
+
+### OpenRouter Video Node
+
+The repository also includes a real `OpenRouter Video` execution node.
+
+Safety behavior:
+
+- It includes its own `api_key` field
+- It validates common capability mismatches before sending the request
+- It now returns much more detailed server-side error messages when OpenRouter rejects a request
+
+Current capabilities:
+
+- Text-to-video
+- Image-to-video with `image_1`
+- Start/end-frame-to-video with `image_1` + `image_2`
+- Reference-to-video with up to 4 reference images
+- Async submit + poll + download flow for OpenRouter's `/api/v1/videos` API
+- Dynamic `mode`, `duration`, `resolution`, and `aspect_ratio` options based on the selected model
+- Minimum published duration is auto-selected when you switch models, while `auto` remains available as a manual override
+- Current public OpenRouter video catalog models are loaded dynamically, including `alibaba/wan-2.6`, `alibaba/wan-2.7`, `bytedance/seedance-1-5-pro`, `bytedance/seedance-2.0`, `bytedance/seedance-2.0-fast`, `kwaivgi/kling-video-o1`, `openai/sora-2-pro`, and `google/veo-3.1`
+- Estimated cost is included in the node metadata/status whenever the public pricing data is precise enough to derive it
+- Model-dependent passthrough/background controls are surfaced conservatively: the node discovers published passthrough metadata, but it does not invent a universal "transparent background" switch when the OpenRouter public catalog does not explicitly advertise one
+
+Important note:
+
+- This node has been implemented, but not validated against a live paid generation in this repository yet
+- The first real credit-consuming test should still be done deliberately, since OpenRouter video errors can be model-specific and costly
 
 ## Troubleshooting
 
