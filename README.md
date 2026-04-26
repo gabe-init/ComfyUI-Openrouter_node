@@ -56,11 +56,27 @@ pip install -r requirements.txt
 
 The OpenRouter node provides a simple interface to interact with various LLMs through the OpenRouter API.
 
+### API Key Security
+
+> [!WARNING]
+> Entering your API key directly into the node's input field in ComfyUI will embed it in the **workflow metadata** of every image you save. This is a security risk if you share your images.
+
+To keep your API key secure, use one of the following methods:
+
+1.  **JSON Config File (Recommended)**:
+    - Create a file named `openrouter_api_key.json` in the node directory.
+    - Add your key like this: `{"api_key": "your_key_here"}`.
+    - Leave the **api_key** field blank in the ComfyUI interface.
+
+2.  **Environment Variable**:
+    - Set an environment variable named `LLM_KEY` on your system.
+    - The node will automatically pick it up if the UI field is empty.
+
 ### Inputs
 
 #### Required Inputs:
 
-- **api_key**: Your OpenRouter API key. You can get one from [OpenRouter](https://openrouter.ai/).
+- **api_key**: Your OpenRouter API key. Can be left blank if provided via `openrouter_api_key.json` or `LLM_KEY` environment variable.
 - **system_prompt**: The system prompt that sets the behavior of the LLM.
 - **user_message_box**: The user message to send to the LLM.
 - **model**: The model to use for generation. The node automatically fetches the list of available models from OpenRouter.
