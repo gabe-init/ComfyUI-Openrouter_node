@@ -2,6 +2,40 @@ import { app } from "../../../scripts/app.js"
 
 const NODE_IDS = new Set(["OpenRouterNode", "openrouter_node"]);
 
+const CHAT_ONLY_WIDGETS = [
+    "system_prompt",
+    "image_generation_only",
+    "web_search",
+    "pdf_engine",
+    "chat_mode",
+];
+
+const IMAGE_ONLY_WIDGETS = [];
+
+const CHAT_SHARED_WIDGETS = [
+    "user_message_box",
+    "cheapest",
+    "fastest",
+    "aspect_ratio",
+    "image_resolution",
+    "temperature",
+];
+
+const VIDEO_WIDGETS = [
+    "video_mode",
+    "video_prompt",
+    "video_resolution",
+    "video_aspect_ratio",
+    "duration",
+    "generate_audio",
+    "poll_interval_seconds",
+    "timeout_seconds",
+    "provider_json",
+];
+
+const ALL_CHAT_WIDGETS = [...CHAT_ONLY_WIDGETS, ...CHAT_SHARED_WIDGETS];
+const ALL_IMAGE_WIDGETS = [...IMAGE_ONLY_WIDGETS, ...CHAT_SHARED_WIDGETS];
+
 function normalizeValues(values) {
     if (!Array.isArray(values)) {
         return [];
@@ -70,17 +104,106 @@ function chooseValue(currentValue, values) {
     return values[0] ?? "";
 }
 
-function syncChatModelFilter(node, globals, capabilities) {
+function syncWidgetVisibility(node, requestType) {
+    for (const name of ALL_CHAT_WIDGETS) {
+        const widget = getWidget(node, name);
+        if (widget) {
+            widget.hidden = requestType !== "chat";
+        }
+    }
+
+    for (const name of ALL_IMAGE_WIDGETS) {
+        const widget = getWidget(node, name);
+        if (widget) {
+            widget.hidden = requestType !== "image";
+        }
+    }
+
+    for (const name of CHAT_ONLY_WIDGETS) {
+        const widget = getWidget(node, name);
+        if (widget) {
+            widget.hidden = requestType !== "chat";
+        }
+    }
+
+    for (const name of VIDEO_WIDGETS) {
+        const widget = getWidget(node, name);
+        if (widget) {
+            widget.hidden = requestType !== "video";
+        }
+    }
+
+    requestAnimationFrame(() => {
+        const size = node.computeSize?.();
+        if (size) {
+            node.onResize?.(size);
+        }
+        app.graph.setDirtyCanvas(true, true);
+    });
+}
+
+function syncModelList(node, requestType, chatCapabilities, imageCapabilities, videoCapabilities, allModelValues) {
+    const modelWidget = getWidget(node, "model");
+    if (!modelWidget) {
+        return;
+    }
+
+    let filteredValues;
+    if (requestType === "chat") {
+        const chatModelIds = Object.keys(chatCapabilities).filter(
+            (id) => !imageCapabilities[id] || !imageCapabilities[id].is_image_only
+        );
+        const videoIds = new Set(Object.keys(videoCapabilities));
+        filteredValues = allModelValues.filter(
+            (id) => chatModelIds.includes(id) && !videoIds.has(id)
+        );
+    } else if (requestType === "image") {
+        const imageModelIds = Object.keys(imageCapabilities);
+        filteredValues = allModelValues.filter((id) => imageModelIds.includes(id));
+    } else if (requestType === "video") {
+        const videoIds = new Set(Object.keys(videoCapabilities));
+        filteredValues = allModelValues.filter((id) => videoIds.has(id));
+    }
+
+    if (!filteredValues || !filteredValues.length) {
+        return;
+    }
+
+    let changed = false;
+    changed = setComboValues(modelWidget, filteredValues) || changed;
+    const nextModel = chooseValue(modelWidget.value, filteredValues);
+    changed = setWidgetValue(node, modelWidget, nextModel) || changed;
+
+    if (changed) {
+        requestAnimationFrame(() => {
+            const size = node.computeSize?.();
+            if (size) {
+                node.onResize?.(size);
+            }
+            app.graph.setDirtyCanvas(true, true);
+        });
+    }
+}
+
+function syncChatModelFilter(node, globals, chatCapabilities) {
     const modelWidget = getWidget(node, "model");
     const imageOnlyWidget = getWidget(node, "image_generation_only");
     if (!modelWidget || !imageOnlyWidget) {
         return;
     }
 
+    const requestType = String(getWidget(node, "request_type")?.value ?? "chat");
+    if (requestType !== "chat") {
+        return;
+    }
+
     const imageGenerationOnly = Boolean(imageOnlyWidget.value);
+    const chatModelIds = Object.keys(chatCapabilities).filter(
+        (id) => !chatCapabilities[id].is_image_only
+    );
     const filteredValues = imageGenerationOnly
-        ? globals.allModelValues.filter((modelId) => capabilities[modelId]?.supports_image_generation)
-        : globals.allModelValues;
+        ? chatModelIds.filter((modelId) => chatCapabilities[modelId]?.supports_image_generation)
+        : chatModelIds;
 
     let changed = false;
     changed = setComboValues(modelWidget, filteredValues) || changed;
@@ -125,18 +248,31 @@ app.registerExtension({
         const globals = {
             allModelValues: normalizeValues(nodeData.input?.required?.model?.[0]),
         };
-        const capabilities = nodeData.input?.required?.model?.[1]?.chat_capabilities ?? {};
+        const chatCapabilities = nodeData.input?.required?.model?.[1]?.chat_capabilities ?? {};
+        const imageCapabilities = nodeData.input?.required?.model?.[1]?.image_capabilities ?? {};
+        const videoCapabilities = nodeData.input?.required?.model?.[1]?.video_capabilities ?? {};
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
 
+            syncWidgetVisibility(this, "chat");
+
+            wrapWidgetCallback(this, "request_type", () => {
+                const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
+                syncWidgetVisibility(this, requestType);
+                syncModelList(this, requestType, chatCapabilities, imageCapabilities, videoCapabilities, globals.allModelValues);
+            });
+
             wrapWidgetCallback(this, "image_generation_only", () => {
-                syncChatModelFilter(this, globals, capabilities);
+                syncChatModelFilter(this, globals, chatCapabilities);
             });
 
             requestAnimationFrame(() => {
-                syncChatModelFilter(this, globals, capabilities);
+                const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
+                syncWidgetVisibility(this, requestType);
+                syncModelList(this, requestType, chatCapabilities, imageCapabilities, videoCapabilities, globals.allModelValues);
+                syncChatModelFilter(this, globals, chatCapabilities);
             });
 
             return result;
@@ -146,7 +282,10 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             onConfigure?.apply(this, arguments);
             requestAnimationFrame(() => {
-                syncChatModelFilter(this, globals, capabilities);
+                const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
+                syncWidgetVisibility(this, requestType);
+                syncModelList(this, requestType, chatCapabilities, imageCapabilities, videoCapabilities, globals.allModelValues);
+                syncChatModelFilter(this, globals, chatCapabilities);
             });
         };
     },

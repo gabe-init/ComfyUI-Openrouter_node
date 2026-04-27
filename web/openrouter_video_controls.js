@@ -1,6 +1,6 @@
 import { app } from "../../../scripts/app.js"
 
-const NODE_ID = "OpenRouterVideoNode";
+const NODE_IDS = new Set(["OpenRouterNode", "openrouter_node"]);
 const AUTO_VALUE = "auto";
 const ESTIMATED_COST_WIDGET = "estimated_cost";
 const LEGACY_PRICING_NOTE_WIDGET = "pricing_note";
@@ -379,20 +379,31 @@ function configureAdvancedProviderWidget(node) {
 
 function getCurrentSettings(node) {
     return {
-        mode: getWidget(node, "mode")?.value ?? "text_to_video",
-        resolution: getWidget(node, "resolution")?.value ?? AUTO_VALUE,
-        aspectRatio: getWidget(node, "aspect_ratio")?.value ?? AUTO_VALUE,
+        mode: getWidget(node, "video_mode")?.value ?? "text_to_video",
+        resolution: getWidget(node, "video_resolution")?.value ?? AUTO_VALUE,
+        aspectRatio: getWidget(node, "video_aspect_ratio")?.value ?? AUTO_VALUE,
         duration: parseDuration(getWidget(node, "duration")?.value),
         generateAudio: Boolean(getWidget(node, "generate_audio")?.value),
     };
 }
 
 function syncEstimatedCost(node, capabilities) {
+    const requestType = String(getWidget(node, "request_type")?.value ?? "chat");
+    if (requestType !== "video") {
+        const estimatedCostWidget = getWidget(node, ESTIMATED_COST_WIDGET);
+        if (estimatedCostWidget) {
+            estimatedCostWidget.hidden = true;
+        }
+        return false;
+    }
+
     const modelWidget = getWidget(node, "model");
     const { estimatedCostWidget } = ensureInfoWidgets(node);
     if (!modelWidget || !estimatedCostWidget) {
         return false;
     }
+
+    estimatedCostWidget.hidden = false;
 
     const modelId = modelWidget.value == null ? "" : String(modelWidget.value);
     const modelCapabilities = capabilities[modelId] ?? {};
@@ -473,6 +484,11 @@ function chooseValue(currentValue, values, fallbackValue) {
 }
 
 function syncVideoWidgets(node, globals, capabilities, options = {}) {
+    const requestType = String(getWidget(node, "request_type")?.value ?? "chat");
+    if (requestType !== "video") {
+        return;
+    }
+
     const modelWidget = getWidget(node, "model");
     if (!modelWidget) {
         return;
@@ -481,9 +497,9 @@ function syncVideoWidgets(node, globals, capabilities, options = {}) {
     const modelId = modelWidget.value == null ? "" : String(modelWidget.value);
     const modelCapabilities = capabilities[modelId] ?? {};
 
-    const modeWidget = getWidget(node, "mode");
-    const resolutionWidget = getWidget(node, "resolution");
-    const aspectRatioWidget = getWidget(node, "aspect_ratio");
+    const modeWidget = getWidget(node, "video_mode");
+    const resolutionWidget = getWidget(node, "video_resolution");
+    const aspectRatioWidget = getWidget(node, "video_aspect_ratio");
     const durationWidget = getWidget(node, "duration");
 
     const modeValues = normalizeValues(
@@ -564,14 +580,14 @@ function syncVideoWidgets(node, globals, capabilities, options = {}) {
 app.registerExtension({
     name: "OpenRouter.VideoControls",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_ID) {
+        if (!NODE_IDS.has(nodeData.name)) {
             return;
         }
 
         const globals = {
-            modeValues: normalizeValues(nodeData.input?.required?.mode?.[0]),
-            resolutionValues: normalizeValues(nodeData.input?.required?.resolution?.[0]),
-            aspectRatioValues: normalizeValues(nodeData.input?.required?.aspect_ratio?.[0]),
+            modeValues: normalizeValues(nodeData.input?.required?.video_mode?.[0]),
+            resolutionValues: normalizeValues(nodeData.input?.required?.video_resolution?.[0]),
+            aspectRatioValues: normalizeValues(nodeData.input?.required?.video_aspect_ratio?.[0]),
             durationValues: normalizeValues(nodeData.input?.required?.duration?.[0]),
         };
         const capabilities = nodeData.input?.required?.model?.[1]?.video_capabilities ?? {};
@@ -582,17 +598,35 @@ app.registerExtension({
 
             configureAdvancedProviderWidget(this);
             ensureInfoWidgets(this);
+
             wrapWidgetCallback(this, "model", () => {
                 syncVideoWidgets(this, globals, capabilities, { forceMinimumDuration: true });
             });
-            for (const widgetName of ["mode", "resolution", "aspect_ratio", "duration", "generate_audio"]) {
+            for (const widgetName of ["video_mode", "video_resolution", "video_aspect_ratio", "duration", "generate_audio"]) {
                 wrapWidgetCallback(this, widgetName, () => {
                     syncVideoWidgets(this, globals, capabilities);
                 });
             }
 
+            wrapWidgetCallback(this, "request_type", () => {
+                const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
+                if (requestType === "video") {
+                    requestAnimationFrame(() => {
+                        syncVideoWidgets(this, globals, capabilities);
+                    });
+                }
+            });
+
             requestAnimationFrame(() => {
-                syncVideoWidgets(this, globals, capabilities);
+                const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
+                if (requestType === "video") {
+                    syncVideoWidgets(this, globals, capabilities);
+                } else {
+                    const estimatedCostWidget = getWidget(this, ESTIMATED_COST_WIDGET);
+                    if (estimatedCostWidget) {
+                        estimatedCostWidget.hidden = true;
+                    }
+                }
             });
 
             return result;
@@ -603,7 +637,15 @@ app.registerExtension({
             onConfigure?.apply(this, arguments);
             requestAnimationFrame(() => {
                 configureAdvancedProviderWidget(this);
-                syncVideoWidgets(this, globals, capabilities);
+                const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
+                if (requestType === "video") {
+                    syncVideoWidgets(this, globals, capabilities);
+                } else {
+                    const estimatedCostWidget = getWidget(this, ESTIMATED_COST_WIDGET);
+                    if (estimatedCostWidget) {
+                        estimatedCostWidget.hidden = true;
+                    }
+                }
             });
         };
     },

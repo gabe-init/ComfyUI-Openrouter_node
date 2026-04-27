@@ -23,6 +23,14 @@ class OpenRouterCatalog:
         "google/gemini-3.1-flash-image-preview",
         "google/gemini-3-pro-image-preview",
         "google/gemini-2.5-flash-image",
+        "openai/gpt-5-image-mini",
+        "openai/gpt-5-image",
+        "openai/gpt-5.4-image-2",
+        "google/gemini-2.5-pro",
+        "openai/gpt-4o",
+    ]
+
+    FALLBACK_IMAGE_ONLY_MODELS = [
         "black-forest-labs/flux.2-pro",
         "black-forest-labs/flux.2-flex",
         "black-forest-labs/flux.2-klein-4b",
@@ -33,11 +41,6 @@ class OpenRouterCatalog:
         "sourceful/riverflow-v2-standard-preview",
         "sourceful/riverflow-v2-max-preview",
         "bytedance-seed/seedream-4.5",
-        "openai/gpt-5-image-mini",
-        "openai/gpt-5-image",
-        "openai/gpt-5.4-image-2",
-        "google/gemini-2.5-pro",
-        "openai/gpt-4o",
     ]
 
     FALLBACK_IMAGE_MODELS = [
@@ -157,6 +160,7 @@ class OpenRouterCatalog:
 
     @classmethod
     def fetch_chat_model_ids(cls) -> List[str]:
+        video_ids = set(cls.fetch_video_model_ids())
         models = cls.fetch_all_models()
         if not models:
             return cls.FALLBACK_CHAT_MODELS
@@ -166,10 +170,14 @@ class OpenRouterCatalog:
             model_id = model.get("id")
             if not model_id:
                 continue
+            if model_id in video_ids:
+                continue
 
             output_modalities = set(cls._extract_output_modalities(model))
 
-            # Keep the chat node focused on outputs it can already parse.
+            if output_modalities == {"image"}:
+                continue
+
             if not output_modalities or output_modalities.intersection({"text", "image"}):
                 model_ids.append(model_id)
 
@@ -194,6 +202,56 @@ class OpenRouterCatalog:
 
         model_ids = sorted(set(model_ids))
         return model_ids if model_ids else cls.FALLBACK_CHAT_MODELS
+
+    @classmethod
+    def fetch_image_only_model_ids(cls) -> List[str]:
+        models = cls.fetch_all_models()
+        if not models:
+            return cls.FALLBACK_IMAGE_ONLY_MODELS
+
+        model_ids = []
+        for model in models:
+            model_id = model.get("id")
+            if not model_id:
+                continue
+
+            output_modalities = set(cls._extract_output_modalities(model))
+            if output_modalities == {"image"}:
+                model_ids.append(model_id)
+
+        model_ids = sorted(set(model_ids))
+        return model_ids if model_ids else cls.FALLBACK_IMAGE_ONLY_MODELS
+
+    @classmethod
+    def fetch_image_widget_capabilities(cls) -> Dict[str, Dict[str, Any]]:
+        capabilities: Dict[str, Dict[str, Any]] = {}
+        for model in cls.fetch_all_models():
+            model_id = model.get("id")
+            if not isinstance(model_id, str):
+                continue
+
+            output_modalities = cls._extract_output_modalities(model)
+            output_modalities_set = set(output_modalities)
+            if output_modalities_set != {"image"}:
+                continue
+
+            capabilities[model_id] = {
+                "output_modalities": output_modalities,
+                "supports_image_generation": True,
+                "is_image_only": True,
+            }
+
+        for model_id in cls.FALLBACK_IMAGE_ONLY_MODELS:
+            capabilities.setdefault(
+                model_id,
+                {
+                    "output_modalities": ["image"],
+                    "supports_image_generation": True,
+                    "is_image_only": True,
+                },
+            )
+
+        return capabilities
 
     @classmethod
     def fetch_chat_widget_capabilities(cls) -> Dict[str, Dict[str, Any]]:
@@ -681,6 +739,24 @@ class OpenRouterCatalog:
                 "supports_background_control": cls._video_supports_background_control(model),
             }
         return capabilities
+
+    @classmethod
+    def fetch_unified_model_ids(cls) -> List[str]:
+        chat_ids = cls.fetch_chat_model_ids()
+        image_ids = cls.fetch_image_only_model_ids()
+        video_ids = cls.fetch_video_model_ids()
+        seen: set = set()
+        combined: List[str] = []
+        for model_id in chat_ids + image_ids + video_ids:
+            if model_id not in seen:
+                seen.add(model_id)
+                combined.append(model_id)
+        if not combined:
+            for model_id in cls.FALLBACK_CHAT_MODELS + cls.FALLBACK_IMAGE_ONLY_MODELS + cls.FALLBACK_VIDEO_MODELS:
+                if model_id not in seen:
+                    seen.add(model_id)
+                    combined.append(model_id)
+        return combined
 
     @classmethod
     def get_video_model_by_id(cls, model_id: str) -> Dict[str, Any]:
