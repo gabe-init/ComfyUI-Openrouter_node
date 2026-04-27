@@ -238,6 +238,101 @@ function wrapWidgetCallback(node, widgetName, callback) {
     widget.__openrouterChatWrapped = true;
 }
 
+function configureApiKeyWidget(node) {
+    const apiKeyWidget = getWidget(node, "api_key");
+    if (!apiKeyWidget || apiKeyWidget.__openrouterApiKeySecured) {
+        return;
+    }
+
+    apiKeyWidget.__openrouterApiKeySecured = true;
+
+    apiKeyWidget.hidden = true;
+    apiKeyWidget.serializeValue = () => "";
+
+    let statusWidget = getWidget(node, "openrouter_api_key_status");
+    if (!statusWidget) {
+        statusWidget = node.addWidget(
+            "text",
+            "openrouter_api_key_status",
+            "API key: not set",
+            () => {},
+            { readonly: true, serialize: false },
+        );
+        statusWidget.serializeValue = () => undefined;
+        if (statusWidget.inputEl) {
+            statusWidget.inputEl.readOnly = true;
+        }
+    }
+
+    let buttonWidget = getWidget(node, "openrouter_api_key_button");
+    if (!buttonWidget) {
+        buttonWidget = node.addWidget(
+            "button",
+            "openrouter_api_key_button",
+            "Set API Key",
+            async () => {
+                const current = apiKeyWidget.value && apiKeyWidget.value !== "" ? String(apiKeyWidget.value) : "";
+                const entered = window.prompt("Enter your OpenRouter API key", current && !current.includes("...") ? current : "");
+                if (entered === null) {
+                    return;
+                }
+
+                const nextKey = entered.trim();
+                try {
+                    if (!nextKey) {
+                        const response = await fetch("/openrouter/delete_api_key", { method: "POST" });
+                        const data = await response.json();
+                        if (!data.success) {
+                            throw new Error(data.error || "Could not delete API key");
+                        }
+                        apiKeyWidget.value = "";
+                        statusWidget.value = "API key: not set";
+                    } else {
+                        const response = await fetch("/openrouter/save_api_key", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ api_key: nextKey }),
+                        });
+                        const data = await response.json();
+                        if (!data.success) {
+                            throw new Error(data.error || "Could not save API key");
+                        }
+                        apiKeyWidget.value = data.masked || "saved";
+                        statusWidget.value = `API key saved: ${data.masked || "saved"}`;
+                    }
+
+                    const size = node.computeSize?.();
+                    if (size) {
+                        node.onResize?.(size);
+                    }
+                    app.graph.setDirtyCanvas(true, true);
+                } catch (error) {
+                    statusWidget.value = `API key error: ${error.message}`;
+                    app.graph.setDirtyCanvas(true, true);
+                }
+            },
+            { serialize: false },
+        );
+        buttonWidget.serializeValue = () => undefined;
+    }
+
+    fetch("/openrouter/api_key_status")
+        .then((r) => r.json())
+        .then((data) => {
+            if (data.saved && data.masked) {
+                apiKeyWidget.value = data.masked;
+                if (statusWidget) {
+                    statusWidget.value = data.source === "env"
+                        ? `API key loaded from environment: ${data.masked}`
+                        : `API key saved locally: ${data.masked}`;
+                }
+            } else if (statusWidget) {
+                statusWidget.value = "API key: not set";
+            }
+        })
+        .catch(() => {});
+}
+
 app.registerExtension({
     name: "OpenRouter.ChatControls",
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -257,6 +352,7 @@ app.registerExtension({
             const result = onNodeCreated?.apply(this, arguments);
 
             syncWidgetVisibility(this, "chat");
+            configureApiKeyWidget(this);
 
             wrapWidgetCallback(this, "request_type", () => {
                 const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
@@ -281,6 +377,7 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             onConfigure?.apply(this, arguments);
+            configureApiKeyWidget(this);
             requestAnimationFrame(() => {
                 const requestType = String(getWidget(this, "request_type")?.value ?? "chat");
                 syncWidgetVisibility(this, requestType);

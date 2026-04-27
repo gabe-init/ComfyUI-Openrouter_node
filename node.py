@@ -1,3 +1,4 @@
+import os
 import requests
 import json
 import time
@@ -41,6 +42,45 @@ class OpenRouterNode:
 
     def __init__(self):
         self.chat_manager = ChatSessionManager()
+
+    @classmethod
+    def _api_key_file_path(cls) -> str:
+        return os.path.join(os.path.dirname(__file__), "openrouter_api_key.txt")
+
+    @classmethod
+    def _read_saved_api_key(cls) -> str:
+        try:
+            with open(cls._api_key_file_path(), "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except (FileNotFoundError, OSError):
+            return ""
+
+    @staticmethod
+    def _read_env_api_key() -> str:
+        return os.environ.get("OPENROUTER_API_KEY", "").strip()
+
+    @classmethod
+    def _save_api_key(cls, api_key: str) -> None:
+        try:
+            with open(cls._api_key_file_path(), "w", encoding="utf-8") as f:
+                f.write(api_key.strip())
+        except OSError as e:
+            print(f"Warning: Could not save API key to file: {e}")
+
+    @classmethod
+    def mask_api_key(cls, key: str) -> str:
+        if not key or len(key) < 8:
+            return ""
+        return key[:4] + "..." + key[-4:]
+
+    def _resolve_api_key(self, api_key: str) -> str:
+        if api_key and api_key.strip() and "..." not in api_key:
+            self._save_api_key(api_key.strip())
+            return api_key.strip()
+        saved = self._read_saved_api_key()
+        if saved:
+            return saved
+        return self._read_env_api_key()
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -745,6 +785,7 @@ class OpenRouterNode:
         reference_image_4=None,
         **kwargs,
     ):
+        api_key = self._resolve_api_key(api_key)
         if request_type == "video":
             return self._generate_video(
                 api_key=api_key,
