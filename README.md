@@ -12,7 +12,6 @@ You can now load your API key from a JSON config or env var instead of typing it
 - **Env var:** set `LLM_KEY`, leave the field blank
 - **UI field:** still works if you don't share workflows
 
-Examples below updated to "provide your API key" instead of "enter your API key".
 
 ### 4/5/2026 - Seed, Resolution, Aspect Ratio, Temperature Fix
 - Added **seed** input
