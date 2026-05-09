@@ -33,7 +33,8 @@ class OpenRouterNode:
     def __init__(self):
         self.chat_manager = ChatSessionManager()
 
-    def get_api_key(self, api_key_ui):
+    @staticmethod
+    def get_api_key(api_key_ui):
         """
         Resolves the API key from:
         1. UI input field (if not empty)
@@ -678,8 +679,9 @@ class OpenRouterNode:
 
         # Combine all relevant inputs into a tuple for comparison
         # Use primitive types where possible for reliable hashing/comparison
-        # Note: We don't hash the resolved API key from file/env to avoid re-running 
-        # if only the hidden key changes (which is rare), but we still pass the UI value.
+        # Note: api_key here is the UI value only. Keys resolved from the LLM_KEY
+        # env var or openrouter_api_key.json are intentionally NOT part of the
+        # cache key — they're treated as user environment, not workflow inputs.
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
                 aspect_ratio, image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)

@@ -72,6 +72,9 @@ To keep your API key secure, use one of the following methods:
     - Set an environment variable named `LLM_KEY` on your system.
     - The node will automatically pick it up if the UI field is empty.
 
+> [!NOTE]
+> If you've ever typed your key into the **api_key** field, clear it before saving the workflow — the value is stored in the workflow JSON. On Linux/macOS, restrict the JSON config with `chmod 600 openrouter_api_key.json` so only your user can read it.
+
 ### Inputs
 
 #### Required Inputs:
