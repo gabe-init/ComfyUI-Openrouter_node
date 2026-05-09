@@ -31,6 +31,12 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const me = onNodeCreated?.apply(this);
             
+            // Find api_key widget and update label with security warning
+            const apiKeyWidget = this.widgets?.find(w => w.name === "api_key");
+            if (apiKeyWidget) {
+                apiKeyWidget.label = "api_key (Leave blank for secure loading)";
+            }
+
             // Start with a new dynamic input - exactly like cozy example
             this.addInput(PREFIX, TYPE);
             

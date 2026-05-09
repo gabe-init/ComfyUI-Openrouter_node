@@ -8,6 +8,7 @@ import torch
 import tiktoken
 from PIL import Image
 import hashlib # Added for hashing PDF bytes in IS_CHANGED
+import os
 from .chat_manager import ChatSessionManager
 
 # Define a placeholder type name for PDF data.
@@ -31,6 +32,36 @@ class OpenRouterNode:
 
     def __init__(self):
         self.chat_manager = ChatSessionManager()
+
+    @staticmethod
+    def get_api_key(api_key_ui):
+        """
+        Resolves the API key from:
+        1. UI input field (if not empty)
+        2. Environment variable 'LLM_KEY'
+        3. config file 'openrouter_api_key.json' in node directory
+        """
+        if api_key_ui and api_key_ui.strip():
+            return api_key_ui.strip()
+
+        # Check environment variable
+        env_key = os.environ.get("LLM_KEY")
+        if env_key and env_key.strip():
+            return env_key.strip()
+
+        # Check JSON file
+        config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "openrouter_api_key.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    file_key = config.get("api_key")
+                    if file_key and file_key.strip():
+                        return file_key.strip()
+            except Exception as e:
+                print(f"Error reading openrouter_api_key.json: {e}")
+
+        return ""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -136,6 +167,7 @@ class OpenRouterNode:
         Fetches the user's credits information from the OpenRouter API.
         Returns a formatted string with remaining credits.
         """
+        api_key = self.get_api_key(api_key)
         if not api_key:
              return "API Key not provided."
 
@@ -188,8 +220,12 @@ class OpenRouterNode:
         """
         # Create empty placeholder image
         placeholder_image = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+        
+        # Resolve API key
+        api_key = self.get_api_key(api_key)
+        
         if not api_key:
-             return ("Error: API Key not provided.", placeholder_image, "Stats N/A", "Credits N/A")
+             return ("Error: API Key not provided. Set LLM_KEY env var or use openrouter_api_key.json", placeholder_image, "Stats N/A", "Credits N/A")
 
         url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
@@ -643,6 +679,9 @@ class OpenRouterNode:
 
         # Combine all relevant inputs into a tuple for comparison
         # Use primitive types where possible for reliable hashing/comparison
+        # Note: api_key here is the UI value only. Keys resolved from the LLM_KEY
+        # env var or openrouter_api_key.json are intentionally NOT part of the
+        # cache key — they're treated as user environment, not workflow inputs.
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
                 aspect_ratio, image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)
