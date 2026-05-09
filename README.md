@@ -4,6 +4,16 @@ A custom node for ComfyUI that allows you to interact with OpenRouter's API, pro
 
 ## Updates
 
+### 5/9/2026 - Secure API Key Loading
+
+You can now load your API key from a JSON config or env var instead of typing it into the node, which avoids leaking it in workflow metadata when sharing images.
+
+- **JSON config:** put `{"api_key": "your_key_here"}` in `openrouter_api_key.json` in the node directory, leave the field blank
+- **Env var:** set `LLM_KEY`, leave the field blank
+- **UI field:** still works if you don't share workflows
+
+Examples below updated to "provide your API key" instead of "enter your API key".
+
 ### 4/5/2026 - Seed, Resolution, Aspect Ratio, Temperature Fix
 - Added **seed** input
 - Added **image_resolution** dropdown (1K, 2K, 4K)
@@ -110,7 +120,7 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 ### Basic Text Generation
 
 1. Add the OpenRouter node to your workflow
-2. Enter your API key
+2. Provide your API key (see [API Key Security](#api-key-security))
 3. Set a system prompt (e.g., "You are a helpful assistant.")
 4. Enter a user message (e.g., "Explain quantum computing in simple terms.")
 5. Select a model (e.g., "openai/gpt-4")
@@ -120,7 +130,7 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 
 1. Add the OpenRouter node to your workflow
 2. Connect an image output from another node to the "image_1" input
-3. Enter your API key
+3. Provide your API key (see [API Key Security](#api-key-security))
 4. Set a system prompt (e.g., "You are a helpful assistant.")
 5. Enter a user message (e.g., "Describe this image in detail.")
 6. Select a multimodal model (e.g., "openai/gpt-4-vision" or "anthropic/claude-3-opus-20240229")
@@ -141,7 +151,7 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 ### Image Generation
 
 1. Add the OpenRouter node to your workflow
-2. Enter your API key
+2. Provide your API key (see [API Key Security](#api-key-security))
 3. Set a system prompt (e.g., "You are a helpful assistant.")
 4. Enter a user message with generation keywords (e.g., "Generate a beautiful sunset over mountains", "Create an image of a futuristic city", "Draw a cat wearing a hat")
 5. Select an image-capable model (e.g., "google/gemini-2.5-flash-image-preview" - also known as Nano-Banana)
