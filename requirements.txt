@@ -1,3 +1,2 @@
-requests
-tiktoken
-Pillow
+tiktoken  # accurate LLM token counting
+Pillow    # image processing
