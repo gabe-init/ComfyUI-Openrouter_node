@@ -105,6 +105,7 @@ class OpenRouterNode:
                     "8:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                 ], {"default": "auto"}),
                 "image_resolution": (["1K", "2K", "4K"], {"default": "1K"}),
+                "reasoning_effort": (["none", "minimal", "low", "medium", "high", "xhigh"], {"default": "none"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
                     "default": 1.0,
@@ -207,7 +208,7 @@ class OpenRouterNode:
     def generate_response(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                          aspect_ratio="auto", image_resolution="1K", seed=0,
-                         pdf_data=None, user_message_input=None, **kwargs):
+                         pdf_data=None, user_message_input=None, reasoning_effort="none", **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
         Handles text, optional image, and optional PDF inputs.
@@ -359,6 +360,7 @@ class OpenRouterNode:
             "model": modified_model,
             "messages": messages,
             "temperature": validated_temp,
+            "reasoning": { "effort": reasoning_effort },
             "seed": seed
         }
 
