@@ -97,6 +97,7 @@ To keep your API key secure, use one of the following methods:
 - **fastest**: Route to the fastest provider by appending `:nitro` to the model ID (disabled by default).
 - **temperature**: Controls the randomness of the model's output (0.0 to 2.0).
 - **chat_mode**: Enable conversation mode to maintain context across messages (disabled by default).
+- **request_timeout**: Maximum time, in seconds, to wait for the main OpenRouter completion request before returning an error (default: 120).
 
 #### Optional Inputs:
 
