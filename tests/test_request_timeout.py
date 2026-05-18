@@ -75,7 +75,7 @@ class RequestTimeoutTests(unittest.TestCase):
         self.node.fetch_credits = Mock(return_value="Remaining: $1.000")
         self.node.count_tokens = Mock(return_value=1)
 
-    def call_generate_response(self, request_timeout=120):
+    def call_generate_response(self, request_timeout=120, reasoning_effort="auto"):
         return self.node.generate_response(
             api_key="test-key",
             system_prompt="system",
@@ -88,6 +88,7 @@ class RequestTimeoutTests(unittest.TestCase):
             pdf_engine="auto",
             chat_mode=False,
             request_timeout=request_timeout,
+            reasoning_effort=reasoning_effort,
         )
 
     def test_main_openrouter_request_uses_configured_timeout(self):
@@ -104,6 +105,71 @@ class RequestTimeoutTests(unittest.TestCase):
         self.assertEqual(result[0], "done")
         self.node_module.requests.post.assert_called_once()
         self.assertEqual(self.node_module.requests.post.call_args.kwargs["timeout"], 45)
+
+    def test_default_reasoning_effort_omits_reasoning_override(self):
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+        }
+        self.node_module.requests.post.return_value = response
+
+        result = self.call_generate_response()
+
+        self.assertEqual(result[0], "done")
+        payload = self.node_module.requests.post.call_args.kwargs["json"]
+        self.assertNotIn("reasoning", payload)
+
+    def test_explicit_reasoning_effort_is_sent(self):
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+        }
+        self.node_module.requests.post.return_value = response
+
+        result = self.call_generate_response(reasoning_effort="high")
+
+        self.assertEqual(result[0], "done")
+        payload = self.node_module.requests.post.call_args.kwargs["json"]
+        self.assertEqual(payload["reasoning"], {"effort": "high"})
+
+    def test_invalid_reasoning_effort_falls_back_to_auto(self):
+        response = Mock()
+        response.raise_for_status = Mock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+        }
+        self.node_module.requests.post.return_value = response
+
+        result = self.call_generate_response(reasoning_effort="unsupported")
+
+        self.assertEqual(result[0], "done")
+        payload = self.node_module.requests.post.call_args.kwargs["json"]
+        self.assertNotIn("reasoning", payload)
+
+    def test_is_changed_includes_reasoning_effort(self):
+        base_args = dict(
+            api_key="test-key",
+            system_prompt="system",
+            user_message_box="hello",
+            model="openai/gpt-4o",
+            web_search=False,
+            cheapest=False,
+            fastest=False,
+            temperature=1.0,
+            pdf_engine="auto",
+            chat_mode=False,
+            request_timeout=120,
+        )
+
+        low_key = self.node_module.OpenRouterNode.IS_CHANGED(**base_args, reasoning_effort="low")
+        high_key = self.node_module.OpenRouterNode.IS_CHANGED(**base_args, reasoning_effort="high")
+
+        self.assertNotEqual(low_key, high_key)
 
     def test_timeout_exception_returns_clear_error(self):
         self.node_module.requests.post.side_effect = FakeTimeout("request timed out")

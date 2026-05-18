@@ -32,6 +32,8 @@ class OpenRouterNode:
     default_request_timeout = 120
     min_request_timeout = 1
     max_request_timeout = 3600
+    reasoning_effort_options = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
+    default_reasoning_effort = "auto"
 
     def __init__(self):
         self.chat_manager = ChatSessionManager()
@@ -108,7 +110,7 @@ class OpenRouterNode:
                     "8:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                 ], {"default": "auto"}),
                 "image_resolution": (["1K", "2K", "4K"], {"default": "1K"}),
-                "reasoning_effort": (["none", "minimal", "low", "medium", "high", "xhigh"], {"default": "none"}),
+                "reasoning_effort": (list(cls.reasoning_effort_options), {"default": cls.default_reasoning_effort}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
                     "default": 1.0,
@@ -183,6 +185,18 @@ class OpenRouterNode:
         except (ValueError, TypeError):
             return self.default_request_timeout
 
+    @classmethod
+    def validate_reasoning_effort(cls, reasoning_effort):
+        """
+        Validates OpenRouter reasoning effort. "auto" means do not send a
+        reasoning override and let OpenRouter/model defaults apply.
+        """
+        if isinstance(reasoning_effort, str):
+            normalized_effort = reasoning_effort.strip().lower()
+            if normalized_effort in cls.reasoning_effort_options:
+                return normalized_effort
+        return cls.default_reasoning_effort
+
     def fetch_credits(self, api_key, timeout=None):
         """
         Fetches the user's credits information from the OpenRouter API.
@@ -229,7 +243,7 @@ class OpenRouterNode:
     def generate_response(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                          request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
-                         pdf_data=None, user_message_input=None, reasoning_effort="none", **kwargs):
+                         pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
         Handles text, optional image, and optional PDF inputs.
@@ -260,6 +274,7 @@ class OpenRouterNode:
         # Validate and convert temperature
         validated_temp = self.validate_temperature(temperature)
         validated_timeout = self.validate_request_timeout(request_timeout)
+        validated_reasoning_effort = self.validate_reasoning_effort(reasoning_effort)
 
         # Decide whether to use user_message_input or user_message_box
         user_text = user_message_input if user_message_input is not None and user_message_input.strip() else user_message_box
@@ -382,9 +397,10 @@ class OpenRouterNode:
             "model": modified_model,
             "messages": messages,
             "temperature": validated_temp,
-            "reasoning": { "effort": reasoning_effort },
             "seed": seed
         }
+        if validated_reasoning_effort != "auto":
+            data["reasoning"] = {"effort": validated_reasoning_effort}
 
         print(f"Payload: model={modified_model}")
 
@@ -506,6 +522,8 @@ class OpenRouterNode:
             )
             if pdf_engine != "auto":
                  stats_text += f", PDF Engine: {pdf_engine}"
+            if validated_reasoning_effort != "auto":
+                 stats_text += f", Reasoning: {validated_reasoning_effort}"
 
 
             # Fetch credits information AFTER the main request
@@ -651,7 +669,7 @@ class OpenRouterNode:
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                    request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
-                   pdf_data=None, user_message_input=None, **kwargs):
+                   pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
         """
         Check if any input that affects the output has changed.
         Includes hashing image and PDF data.
@@ -706,6 +724,8 @@ class OpenRouterNode:
         except (ValueError, TypeError):
             timeout_int = cls.default_request_timeout
 
+        validated_reasoning_effort = cls.validate_reasoning_effort(reasoning_effort)
+
 
         # Combine all relevant inputs into a tuple for comparison
         # Use primitive types where possible for reliable hashing/comparison
@@ -714,7 +734,8 @@ class OpenRouterNode:
         # cache key — they're treated as user environment, not workflow inputs.
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
-                timeout_int, aspect_ratio, image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)
+                timeout_int, aspect_ratio, image_resolution, seed, validated_reasoning_effort,
+                tuple(image_hashes), pdf_hash, user_message_input)
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
