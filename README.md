@@ -4,6 +4,10 @@ A custom node for ComfyUI that allows you to interact with OpenRouter's API, pro
 
 ## Updates
 
+### 5/18/2026
+
+Reasoning effort setting added. Make sure the model supports reasoning when using
+
 ### 5/9/2026 - Secure API Key Loading
 
 You can now load your API key from a JSON config or env var instead of typing it into the node, which avoids leaking it in workflow metadata when sharing images.
