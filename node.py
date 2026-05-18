@@ -29,6 +29,11 @@ class OpenRouterNode:
     models_cache = None
     last_fetch_time = 0
     cache_duration = 3600  # Cache duration in seconds (1 hour)
+    default_request_timeout = 120
+    min_request_timeout = 1
+    max_request_timeout = 3600
+    reasoning_effort_options = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
+    default_reasoning_effort = "auto"
 
     def __init__(self):
         self.chat_manager = ChatSessionManager()
@@ -105,6 +110,7 @@ class OpenRouterNode:
                     "8:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                 ], {"default": "auto"}),
                 "image_resolution": (["1K", "2K", "4K"], {"default": "1K"}),
+                "reasoning_effort": (list(cls.reasoning_effort_options), {"default": cls.default_reasoning_effort}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
                     "default": 1.0,
@@ -116,6 +122,13 @@ class OpenRouterNode:
                 }),
                  "pdf_engine": (["auto", "mistral-ocr", "pdf-text"], {"default": "auto"}),
                 "chat_mode": ("BOOLEAN", {"default": False}),
+                "request_timeout": ("INT", {
+                    "default": cls.default_request_timeout,
+                    "min": cls.min_request_timeout,
+                    "max": cls.max_request_timeout,
+                    "step": 1,
+                    "display": "number",
+                }),
             },
             "optional": {
                 "pdf_data": (PDF_DATA_TYPE,), # Use '*' and check structure in generate_response
@@ -138,7 +151,7 @@ class OpenRouterNode:
         if (cls.models_cache is None) or (current_time - cls.last_fetch_time > cls.cache_duration):
             url = "https://openrouter.ai/api/v1/models"
             try:
-                response = requests.get(url)
+                response = requests.get(url, timeout=cls.default_request_timeout)
                 response.raise_for_status()
                 models = response.json()["data"]
                 # Filter for models that support chat completions if needed, but API handles this
@@ -162,7 +175,29 @@ class OpenRouterNode:
         except (ValueError, TypeError):
             return 1.0  # Return default if conversion fails
 
-    def fetch_credits(self, api_key):
+    def validate_request_timeout(self, request_timeout):
+        """
+        Validates and converts request timeout to seconds within an acceptable range.
+        """
+        try:
+            timeout = int(request_timeout)
+            return max(self.min_request_timeout, min(self.max_request_timeout, timeout))
+        except (ValueError, TypeError):
+            return self.default_request_timeout
+
+    @classmethod
+    def validate_reasoning_effort(cls, reasoning_effort):
+        """
+        Validates OpenRouter reasoning effort. "auto" means do not send a
+        reasoning override and let OpenRouter/model defaults apply.
+        """
+        if isinstance(reasoning_effort, str):
+            normalized_effort = reasoning_effort.strip().lower()
+            if normalized_effort in cls.reasoning_effort_options:
+                return normalized_effort
+        return cls.default_reasoning_effort
+
+    def fetch_credits(self, api_key, timeout=None):
         """
         Fetches the user's credits information from the OpenRouter API.
         Returns a formatted string with remaining credits.
@@ -180,7 +215,8 @@ class OpenRouterNode:
         }
 
         try:
-            response = requests.get(url, headers=headers)
+            validated_timeout = self.validate_request_timeout(timeout)
+            response = requests.get(url, headers=headers, timeout=validated_timeout)
             response.raise_for_status()
 
             result = response.json()
@@ -206,8 +242,8 @@ class OpenRouterNode:
 
     def generate_response(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
-                         aspect_ratio="auto", image_resolution="1K", seed=0,
-                         pdf_data=None, user_message_input=None, **kwargs):
+                         request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
+                         pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
         Handles text, optional image, and optional PDF inputs.
@@ -237,6 +273,8 @@ class OpenRouterNode:
 
         # Validate and convert temperature
         validated_temp = self.validate_temperature(temperature)
+        validated_timeout = self.validate_request_timeout(request_timeout)
+        validated_reasoning_effort = self.validate_reasoning_effort(reasoning_effort)
 
         # Decide whether to use user_message_input or user_message_box
         user_text = user_message_input if user_message_input is not None and user_message_input.strip() else user_message_box
@@ -361,6 +399,8 @@ class OpenRouterNode:
             "temperature": validated_temp,
             "seed": seed
         }
+        if validated_reasoning_effort != "auto":
+            data["reasoning"] = {"effort": validated_reasoning_effort}
 
         print(f"Payload: model={modified_model}")
 
@@ -388,7 +428,7 @@ class OpenRouterNode:
         # --- Make API Call and Process Response ---
         try:
             start_time = time.time()
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=headers, json=data, timeout=validated_timeout)
             response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
             end_time = time.time()
 
@@ -482,10 +522,12 @@ class OpenRouterNode:
             )
             if pdf_engine != "auto":
                  stats_text += f", PDF Engine: {pdf_engine}"
+            if validated_reasoning_effort != "auto":
+                 stats_text += f", Reasoning: {validated_reasoning_effort}"
 
 
             # Fetch credits information AFTER the main request
-            credits_text = self.fetch_credits(api_key)
+            credits_text = self.fetch_credits(api_key, timeout=validated_timeout)
 
             # Save conversation in chat mode
             if chat_mode and session_path:
@@ -626,8 +668,8 @@ class OpenRouterNode:
     @classmethod
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
-                   aspect_ratio="auto", image_resolution="1K", seed=0,
-                   pdf_data=None, user_message_input=None, **kwargs):
+                   request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
+                   pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
         """
         Check if any input that affects the output has changed.
         Includes hashing image and PDF data.
@@ -676,6 +718,14 @@ class OpenRouterNode:
         except (ValueError, TypeError):
             temp_float = 1.0
 
+        try:
+            timeout_int = int(request_timeout)
+            timeout_int = max(cls.min_request_timeout, min(cls.max_request_timeout, timeout_int))
+        except (ValueError, TypeError):
+            timeout_int = cls.default_request_timeout
+
+        validated_reasoning_effort = cls.validate_reasoning_effort(reasoning_effort)
+
 
         # Combine all relevant inputs into a tuple for comparison
         # Use primitive types where possible for reliable hashing/comparison
@@ -684,7 +734,8 @@ class OpenRouterNode:
         # cache key — they're treated as user environment, not workflow inputs.
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
-                aspect_ratio, image_resolution, seed, tuple(image_hashes), pdf_hash, user_message_input)
+                timeout_int, aspect_ratio, image_resolution, seed, validated_reasoning_effort,
+                tuple(image_hashes), pdf_hash, user_message_input)
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
