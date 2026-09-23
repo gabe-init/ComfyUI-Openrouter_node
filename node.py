@@ -16,10 +16,26 @@ from .chat_manager import ChatSessionManager
 # Expecting a dictionary: {"filename": str, "bytes": bytes}
 PDF_DATA_TYPE = "*" # Use '*' to accept any type, check structure later
 
+# Same convention as PDF_DATA_TYPE, but for audio: {"filename": str, "bytes": bytes}
+AUDIO_DATA_TYPE = "*"
+
+# Maps file extensions to OpenRouter's supported input_audio "format" values
+AUDIO_EXTENSION_FORMAT_MAP = {
+    "wav": "wav",
+    "mp3": "mp3",
+    "aiff": "aiff",
+    "aif": "aiff",
+    "aac": "aac",
+    "ogg": "ogg",
+    "flac": "flac",
+    "m4a": "m4a",
+}
+DEFAULT_AUDIO_FORMAT = "wav"
+
 class OpenRouterNode:
     """
     A node for interacting with OpenRouter's chat/completion API.
-    Supports text, images, and PDFs as input.
+    Supports text, images, PDFs, and audio as input.
     Returns three outputs:
       1) "Output": the text response from the LLM
       2) "Stats": a string detailing tokens per second, input tokens, and output tokens
@@ -132,6 +148,7 @@ class OpenRouterNode:
             },
             "optional": {
                 "pdf_data": (PDF_DATA_TYPE,), # Use '*' and check structure in generate_response
+                "audio_data": (AUDIO_DATA_TYPE,), # Use '*' and check structure in generate_response
                 "user_message_input": ("STRING", {"forceInput": True}),
             }
         }
@@ -243,10 +260,10 @@ class OpenRouterNode:
     def generate_response(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                          request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
-                         pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
+                         pdf_data=None, audio_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
-        Handles text, optional image, and optional PDF inputs.
+        Handles text, optional image, optional PDF, and optional audio inputs.
 
         Returns four outputs:
           (1) Output: the LLM's text response
@@ -354,6 +371,47 @@ class OpenRouterNode:
                 # Optionally return an error or just proceed without the PDF
                 # return ("Error: Invalid PDF data format.", "Stats N/A", "Credits N/A")
 
+        # 4. Add Audio part (optional)
+        if audio_data is not None:
+            audio_bytes = None
+            audio_format = None
+
+            if isinstance(audio_data, dict) and "waveform" in audio_data and "sample_rate" in audio_data:
+                # ComfyUI's native AUDIO type (e.g. from the built-in "Load Audio" node)
+                try:
+                    audio_bytes, audio_format = self.comfy_audio_to_input_audio_bytes(audio_data)
+                except Exception as e:
+                    print(f"Error encoding AUDIO input: {e}")
+                    return (f"Error encoding AUDIO input: {e}", placeholder_image, "Stats N/A", "Credits N/A")
+            elif isinstance(audio_data, dict) and "bytes" in audio_data and isinstance(audio_data["bytes"], bytes):
+                # Raw file dict: {"filename": str, "bytes": bytes, "format": optional str}
+                audio_bytes = audio_data["bytes"]
+                # Determine the audio format: explicit "format" key takes priority,
+                # otherwise infer from the filename extension, otherwise fall back to default.
+                if "format" in audio_data and isinstance(audio_data["format"], str) and audio_data["format"].strip():
+                    audio_format = audio_data["format"].strip().lower()
+                elif "filename" in audio_data and isinstance(audio_data["filename"], str) and audio_data["filename"].strip():
+                    ext = audio_data["filename"].strip().rsplit(".", 1)[-1].lower()
+                    audio_format = AUDIO_EXTENSION_FORMAT_MAP.get(ext)
+                if not audio_format:
+                    audio_format = DEFAULT_AUDIO_FORMAT
+            else:
+                # Handle case where audio_data is not in a recognized format
+                print(f"Warning: audio_data input is not in a recognized format (expected ComfyUI AUDIO dict with 'waveform'/'sample_rate', or a dict with 'filename' and 'bytes'). Audio not included.")
+
+            if audio_bytes is not None:
+                try:
+                    base64_audio = base64.b64encode(audio_bytes).decode('utf-8')
+                    user_content_blocks.append({
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64_audio,
+                            "format": audio_format
+                        }
+                    })
+                except Exception as e:
+                    print(f"Error encoding audio: {e}")
+                    return (f"Error encoding audio: {e}", placeholder_image, "Stats N/A", "Credits N/A")
 
         # Determine message format based on content type
         # Use simple string format for text-only requests to ensure compatibility
@@ -560,6 +618,52 @@ class OpenRouterNode:
              return (f"Node Error: {str(e)}", placeholder_image, "Stats N/A due to error", "Credits N/A due to error")
 
     @staticmethod
+    def comfy_audio_to_input_audio_bytes(audio, bit_rate=128000):
+        """
+        Encodes ComfyUI's native AUDIO dict ({"waveform": torch.Tensor [B,C,T], "sample_rate": int}),
+        as produced by nodes like "Load Audio", into compressed audio bytes for upload.
+        Prefers MP3 (much smaller than WAV, fewer tokens for the model to process) via PyAV,
+        falling back to WAV via torchaudio if MP3 encoding isn't available.
+        Returns a (bytes, format) tuple.
+        """
+        waveform = audio["waveform"]
+        sample_rate = audio["sample_rate"]
+
+        if waveform.ndim == 3:
+            if waveform.shape[0] != 1:
+                print(f"Warning: Audio batch size is {waveform.shape[0]}, using only the first item.")
+            waveform = waveform[0]  # -> (channels, samples)
+        waveform = waveform.cpu()
+
+        try:
+            import av  # ComfyUI ships PyAV; import lazily to avoid a hard dependency at module load
+
+            layout = "mono" if waveform.shape[0] == 1 else "stereo"
+            buffer = io.BytesIO()
+            container = av.open(buffer, mode="w", format="mp3")
+            stream = container.add_stream("libmp3lame", rate=sample_rate, layout=layout)
+            stream.bit_rate = bit_rate
+
+            frame = av.AudioFrame.from_ndarray(
+                waveform.movedim(0, 1).reshape(1, -1).float().numpy(),
+                format="flt",
+                layout=layout,
+            )
+            frame.sample_rate = sample_rate
+            frame.pts = 0
+            container.mux(stream.encode(frame))
+            container.mux(stream.encode(None))  # flush encoder
+            container.close()
+            return buffer.getvalue(), "mp3"
+        except Exception as e:
+            print(f"Warning: MP3 encoding via PyAV failed ({e}), falling back to WAV.")
+
+        import torchaudio  # ComfyUI ships torchaudio; import lazily to avoid a hard dependency at module load
+        buffer = io.BytesIO()
+        torchaudio.save(buffer, waveform, sample_rate, format="wav")
+        return buffer.getvalue(), "wav"
+
+    @staticmethod
     def image_to_base64(image):
         """
         Converts a ComfyUI IMAGE (torch.Tensor, BHWC, float 0-1)
@@ -669,10 +773,10 @@ class OpenRouterNode:
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                    request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
-                   pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
+                   pdf_data=None, audio_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
         """
         Check if any input that affects the output has changed.
-        Includes hashing image and PDF data.
+        Includes hashing image, PDF, and audio data.
         """
         # Hash image data if present - handle multiple images from kwargs
         image_hashes = []
@@ -710,6 +814,29 @@ class OpenRouterNode:
              # Handle cases where pdf_data is present but not in the expected format
              pdf_hash = "invalid_pdf_data_format"
 
+        # Hash audio data if present and valid
+        audio_hash = None
+        if audio_data is not None and isinstance(audio_data, dict) and "waveform" in audio_data and "sample_rate" in audio_data:
+             try:
+                 hasher = hashlib.sha256()
+                 hasher.update(audio_data["waveform"].cpu().numpy().tobytes())
+                 hasher.update(str(audio_data["sample_rate"]).encode())
+                 audio_hash = hasher.hexdigest()
+             except Exception as e:
+                 print(f"Warning: Could not hash AUDIO waveform data for IS_CHANGED: {e}")
+                 audio_hash = "audio_hashing_error"
+        elif audio_data is not None and isinstance(audio_data, dict) and "bytes" in audio_data and isinstance(audio_data["bytes"], bytes):
+             try:
+                 hasher = hashlib.sha256()
+                 hasher.update(audio_data["bytes"])
+                 audio_hash = hasher.hexdigest()
+             except Exception as e:
+                 print(f"Warning: Could not hash audio data for IS_CHANGED: {e}")
+                 audio_hash = "audio_hashing_error"
+        elif audio_data is not None:
+             # Handle cases where audio_data is present but not in a recognized format
+             audio_hash = "invalid_audio_data_format"
+
 
         # Ensure temperature is consistently represented (e.g., as float)
         try:
@@ -735,7 +862,7 @@ class OpenRouterNode:
         return (api_key, system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
                 timeout_int, aspect_ratio, image_resolution, seed, validated_reasoning_effort,
-                tuple(image_hashes), pdf_hash, user_message_input)
+                tuple(image_hashes), pdf_hash, audio_hash, user_message_input)
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
@@ -744,5 +871,5 @@ NODE_CLASS_MAPPINGS = {
 
 # Node display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "OpenRouterNode": "OpenRouter LLM Node (Text/Multi-Image/PDF/Chat)" # Updated name
+    "OpenRouterNode": "OpenRouter LLM Node (Text/Multi-Image/PDF/Audio/Chat)" # Updated name
 }

@@ -43,6 +43,7 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 - **NEW: Image generation support** - Generate images with models like google/gemini-2.5-flash-image-preview (Nano-Banana)
 - Dynamic image input visibility - additional inputs appear as you connect images
 - PDF support with multiple OCR engine options
+- Audio input support (wav, mp3, aiff, aac, ogg, flac, m4a) for models that accept audio
 - Web search capability with `:online` modifier
 - Cheapest provider routing with `:floor` modifier
 - Fastest provider routing with `:nitro` modifier
@@ -112,6 +113,9 @@ To keep your API key secure, use one of the following methods:
 - **image_1** through **image_10**: Multiple image inputs for multimodal models. The first image input (image_1) is always visible. Additional image inputs automatically appear as you connect images (up to 10 total).
 - **pdf_data**: PDF document input for models that support document understanding.
 - **pdf_engine**: Choose between "auto", "mistral-ocr", or "pdf-text" for PDF processing.
+- **audio_data**: Audio input for models that support audio understanding. Accepts either:
+  - ComfyUI's native `AUDIO` output (e.g. from the built-in **Load Audio** node) — connect it directly, it's automatically encoded to MP3 (falls back to WAV if MP3 encoding isn't available) to keep the base64 payload small.
+  - A dict with `filename` and `bytes` (and optionally `format`) from a custom loader, the same convention used by `pdf_data`. The format is auto-detected from the filename extension (`wav`, `mp3`, `aiff`/`aif`, `aac`, `ogg`, `flac`, `m4a`), defaulting to `wav` if it can't be determined.
 - **user_message_input**: Alternative input for the user message, useful for connecting to other nodes.
 
 ### Outputs:
