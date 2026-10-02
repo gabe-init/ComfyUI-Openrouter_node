@@ -49,6 +49,8 @@ def install_dependency_stubs():
 
 
 def load_node_module():
+    dependency_names = ("requests", "torch", "tiktoken", "PIL", "PIL.Image", "numpy")
+    original_dependencies = {name: sys.modules.get(name) for name in dependency_names}
     install_dependency_stubs()
     root = Path(__file__).resolve().parents[1]
     package_name = "comfy_openrouter_node_test"
@@ -56,15 +58,28 @@ def load_node_module():
     package = types.ModuleType(package_name)
     package.__path__ = [str(root)]
     sys.modules[package_name] = package
+    catalog = types.ModuleType(f"{package_name}.openrouter_catalog")
+    catalog.get_model = Mock(return_value={})
+    catalog.require_model = Mock(return_value={"architecture": {
+        "input_modalities": ["text"], "output_modalities": ["text"],
+    }})
+    catalog.get_catalog = Mock(return_value={"chat": [], "image": [], "video": []})
+    sys.modules[catalog.__name__] = catalog
 
     spec = importlib.util.spec_from_file_location(
         f"{package_name}.node",
         root / "node.py",
-        submodule_search_locations=[str(root)],
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for name, previous in original_dependencies.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
     return module
 
 

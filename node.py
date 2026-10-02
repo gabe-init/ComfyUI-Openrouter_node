@@ -9,6 +9,8 @@ import tiktoken
 from PIL import Image
 import hashlib # Added for hashing PDF bytes in IS_CHANGED
 import os
+import re
+import logging
 from .chat_manager import ChatSessionManager
 
 # Define a placeholder type name for PDF data.
@@ -18,12 +20,8 @@ PDF_DATA_TYPE = "*" # Use '*' to accept any type, check structure later
 
 class OpenRouterNode:
     """
-    A node for interacting with OpenRouter's chat/completion API.
-    Supports text, images, and PDFs as input.
-    Returns three outputs:
-      1) "Output": the text response from the LLM
-      2) "Stats": a string detailing tokens per second, input tokens, and output tokens
-      3) "Credits": a string showing your remaining OpenRouter account balance
+    OpenRouter chat, image, and video requests with optional media inputs.
+    Preserves Output, image, Stats, Credits and appends native VIDEO.
     """
 
     models_cache = None
@@ -37,6 +35,7 @@ class OpenRouterNode:
 
     def __init__(self):
         self.chat_manager = ChatSessionManager()
+        self.last_video_job_id = ""
 
     @staticmethod
     def get_api_key(api_key_ui):
@@ -109,7 +108,7 @@ class OpenRouterNode:
                     "1:8 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                     "8:1 (google/gemini-3.1-flash-image-preview (Nano Banana 2) only)",
                 ], {"default": "auto"}),
-                "image_resolution": (["1K", "2K", "4K"], {"default": "1K"}),
+                "image_resolution": (["auto", "0.5K", "1K", "2K", "4K"], {"default": "auto"}),
                 "reasoning_effort": (list(cls.reasoning_effort_options), {"default": cls.default_reasoning_effort}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": "fixed"}),
                 "temperature": ("FLOAT", {
@@ -133,37 +132,42 @@ class OpenRouterNode:
             "optional": {
                 "pdf_data": (PDF_DATA_TYPE,), # Use '*' and check structure in generate_response
                 "user_message_input": ("STRING", {"forceInput": True}),
-            }
+                "audio_data": ("AUDIO",),
+                "request_type": (["chat", "image", "video"], {"default": "chat"}),
+                "service_tier": (["auto", "default", "flex", "priority", "ultrafast"], {"default": "auto"}),
+                "image_quality": (["auto", "low", "medium", "high"], {"default": "auto"}),
+                "image_background": (["auto", "opaque", "transparent"], {"default": "auto"}),
+                "video_mode": (["text_to_video", "first_frame", "first_last_frame", "reference_images"], {"default": "text_to_video"}),
+                "video_duration": ("STRING", {"default": "auto"}),
+                "video_resolution": ("STRING", {"default": "auto"}),
+                "video_generate_audio": ("BOOLEAN", {"default": False}),
+                "video_wait_timeout": ("INT", {"default": 900, "min": 1, "max": 3600}),
+                "video_job_id": ("STRING", {"default": ""}),
+            },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("STRING", "IMAGE", "STRING", "STRING",)
-    RETURN_NAMES = ("Output", "image", "Stats", "Credits")
+    RETURN_TYPES = ("STRING", "IMAGE", "STRING", "STRING", "VIDEO")
+    RETURN_NAMES = ("Output", "image", "Stats", "Credits", "video")
 
     FUNCTION = "generate_response"
     CATEGORY = "LLM"
 
     @classmethod
     def fetch_openrouter_models(cls):
-        """
-        Fetches a list of model IDs from the OpenRouter API, caching them.
-        """
-        current_time = time.time()
-        if (cls.models_cache is None) or (current_time - cls.last_fetch_time > cls.cache_duration):
-            url = "https://openrouter.ai/api/v1/models"
-            try:
-                response = requests.get(url, timeout=cls.default_request_timeout)
-                response.raise_for_status()
-                models = response.json()["data"]
-                # Filter for models that support chat completions if needed, but API handles this
-                model_list = sorted([model['id'] for model in models])
-                cls.models_cache = model_list
-                cls.last_fetch_time = current_time
-            except requests.exceptions.RequestException as e:
-                print(f"Error fetching models: {e}")
-                # Provide a default list or indicate error if cache is empty
-                if cls.models_cache is None:
-                    cls.models_cache = ["error_fetching_models", "google/gemma-3-27b-it", "openai/gpt-4o"] # Example fallbacks
-        return cls.models_cache if cls.models_cache else ["error_fetching_models"] # Ensure it's never empty
+        """Read the cached union without blocking ComfyUI's schema/event loop."""
+        from . import openrouter_catalog
+        snapshot = openrouter_catalog.get_catalog()
+        ids = {m["id"] for kind in ("chat", "image", "video")
+               for m in snapshot.get(kind, []) if isinstance(m.get("id"), str)}
+        return sorted(ids) or ["openai/gpt-4o"]
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, model, aspect_ratio="auto", image_resolution="auto",
+                        image_quality="auto", image_background="auto"):
+        # Discovery is asynchronous. Do not reject a saved/manual model merely
+        # because the server's widget snapshot predates a catalog refresh.
+        return True
 
     def validate_temperature(self, temperature):
         """
@@ -210,7 +214,7 @@ class OpenRouterNode:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/yourusername/comfyui-openrouter",
+            "HTTP-Referer": "https://github.com/gabe-init/ComfyUI-Openrouter_node",
             "X-Title": "ComfyUI OpenRouter LLM Node",
         }
 
@@ -235,15 +239,213 @@ class OpenRouterNode:
             # Provide more context about the error
             error_message = f"Error fetching credits: {str(e)}"
             if hasattr(e, 'response') and e.response is not None:
-                 error_message += f" | Status Code: {e.response.status_code} | Response: {e.response.text[:200]}" # Log part of response
+                 error_message += f" | Status Code: {e.response.status_code}"
             return error_message
         except json.JSONDecodeError:
              return "Error fetching credits: Could not decode JSON response."
 
+    @staticmethod
+    def _safe_error(error, api_key=""):
+        message = str(error)
+        if api_key:
+            message = message.replace(api_key, "[redacted]")
+        return re.sub(r"data:[^\s\"']+", "[media omitted]", message)[:600]
+
+    def _remember_video_job(self, job_id, unique_id=None):
+        """Expose recovery before polling, including when Comfy hides cancellation errors."""
+        if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", job_id):
+            raise ValueError("OpenRouter returned an invalid video job ID.")
+        self.last_video_job_id = job_id
+        logger = logging.getLogger(__name__)
+        logger.info("OpenRouter video job: %s. Resume with video_job_id=%s.", job_id, job_id)
+        if unique_id is None:
+            return
+        try:
+            from server import PromptServer
+            server = PromptServer.instance
+            server.send_sync("openrouter.video_job", {"node_id": str(unique_id), "job_id": job_id},
+                             sid=getattr(server, "client_id", None))
+        except Exception:
+            # UI delivery must never turn an accepted paid job into a failure.
+            logger.warning("OpenRouter video job: %s. Resume with video_job_id=%s; frontend update unavailable.",
+                           job_id, job_id)
+
+    @staticmethod
+    def _chat_capabilities(model):
+        """Wait for discovery once; retain catalog variants such as :free."""
+        from .openrouter_catalog import get_model, require_model
+        try:
+            return require_model("chat", model)
+        except ValueError as error:
+            base_model = model
+            while ":" in base_model and base_model.rsplit(":", 1)[1] in {"floor", "nitro", "online"}:
+                base_model = base_model.rsplit(":", 1)[0]
+            if base_model != model:
+                # The blocking lookup has finished; use its refreshed snapshot.
+                try:
+                    return get_model("chat", base_model)
+                except ValueError:
+                    pass
+            raise error
+
+    @staticmethod
+    def _chat_image_config(model, aspect_ratio, image_resolution):
+        """Validate chat image controls using the matching image catalog record."""
+        from .openrouter_catalog import get_model
+        ratio = str(aspect_ratio).split(" ", 1)[0]
+        resolution = "512" if image_resolution == "0.5K" else image_resolution
+        try:
+            record = get_model("image", model)
+            parameters = record.get("supported_parameters") or {}
+        except ValueError:
+            parameters = {}
+
+        def supports(name, value):
+            descriptor = parameters.get(name)
+            return isinstance(descriptor, dict) and descriptor.get("type") == "enum" and value in descriptor.get("values", [])
+
+        config = {}
+        if ratio != "auto":
+            if not supports("aspect_ratio", ratio):
+                raise ValueError(f"Cannot verify aspect ratio {ratio} for this chat image model; choose auto or use the Image API.")
+            config["aspect_ratio"] = ratio
+        # The old node always stored 1K, including for GPT image models. It is
+        # neutral when unavailable; explicit non-default choices must validate.
+        if resolution == "1K" and not supports("resolution", resolution):
+            resolution = "auto"
+        if resolution != "auto":
+            if not model.startswith("google/gemini-") or not supports("resolution", resolution):
+                raise ValueError(f"Resolution {resolution} is not supported for this chat image model; choose auto or use the Image API.")
+            config["image_size"] = resolution
+        return config
+
     def generate_response(self, api_key, system_prompt, user_message_box, model,
+                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
+                          request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
+                          pdf_data=None, user_message_input=None, reasoning_effort="auto",
+                          audio_data=None, request_type="chat", service_tier="auto",
+                          image_quality="auto", image_background="auto", video_mode="text_to_video",
+                          video_duration="auto", video_resolution="auto", video_generate_audio=False,
+                          video_wait_timeout=900, video_job_id="", unique_id=None, **kwargs):
+        """Keep the original four output positions; append native video output."""
+        placeholder = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+        key = self.get_api_key(api_key)
+        self.last_video_job_id = video_job_id.strip() if request_type == "video" else ""
+        try:
+            if not key:
+                raise ValueError("API Key not provided. Set LLM_KEY or openrouter_api_key.json.")
+            if request_type not in ("chat", "image", "video"):
+                raise ValueError("request_type must be chat, image, or video")
+            if service_tier not in ("auto", "default", "flex", "priority", "ultrafast"):
+                raise ValueError("Unsupported service tier")
+            timeout = self.validate_request_timeout(request_timeout)
+            prompt = user_message_input if user_message_input is not None else user_message_box
+            ratio = str(aspect_ratio).split(" ", 1)[0]
+            if request_type == "chat":
+                if pdf_data is not None and (not isinstance(pdf_data, dict) or
+                        not isinstance(pdf_data.get("bytes"), bytes) or not pdf_data["bytes"]):
+                    raise ValueError("pdf_data must contain nonempty PDF bytes")
+                has_images = any(value is not None for name, value in kwargs.items() if re.fullmatch(r"image_\d+", name))
+                # 1K was an unconditional saved value in older text workflows.
+                image_controls = ratio != "auto" or image_resolution not in ("auto", "1K")
+                try:
+                    capabilities = self._chat_capabilities(model)
+                except ValueError as error:
+                    if audio_data is not None or has_images or image_controls:
+                        raise ValueError("Cannot verify the selected chat model's media capabilities. Refresh models before submitting audio, images, or image settings.") from error
+                    capabilities = {}  # Plain custom chat IDs may be absent from discovery.
+                architecture = capabilities.get("architecture") or {}
+                inputs = architecture.get("input_modalities")
+                for modality, present in (("audio", audio_data is not None), ("image", has_images)):
+                    if present and not isinstance(inputs, list):
+                        raise ValueError(f"Cannot verify whether the selected chat model accepts {modality} input.")
+                    if present and modality not in inputs:
+                        raise ValueError(f"The selected chat model does not support {modality} input")
+                if image_controls and "image" not in architecture.get("output_modalities", []):
+                    raise ValueError("The selected chat model does not advertise image output for these image settings.")
+                audio_content = None
+                if audio_data is not None:
+                    from .openrouter_audio import prepare_audio
+                    audio_content = prepare_audio(audio_data)["block"]
+                result = self._generate_chat(
+                    key, system_prompt, user_message_box, model, web_search, cheapest, fastest,
+                    temperature, pdf_engine, chat_mode, request_timeout=timeout,
+                    aspect_ratio=aspect_ratio, image_resolution=image_resolution, seed=seed,
+                    pdf_data=pdf_data, user_message_input=user_message_input,
+                    reasoning_effort=reasoning_effort, service_tier=service_tier,
+                    audio_content=audio_content, capabilities=capabilities, **kwargs)
+                return (*result, None)
+
+            # Recovery must not process or validate inputs from the original job.
+            resuming = request_type == "video" and bool(video_job_id.strip())
+            references = []
+            if not resuming:
+                if audio_data is not None or pdf_data is not None:
+                    raise ValueError("Audio and PDF inputs are supported in chat mode only.")
+                for name in sorted((k for k in kwargs if re.fullmatch(r"image_\d+", k)),
+                                   key=lambda k: int(k.split("_")[1])):
+                    if kwargs[name] is not None:
+                        references.append("data:image/png;base64," + self.image_to_base64(kwargs[name]))
+            if request_type == "image":
+                from .openrouter_images import generate_images
+                from .openrouter_catalog import require_model
+                record = require_model("image", model)
+                resolution = image_resolution
+                # Older workflows always stored 1K even when the model did not
+                # support resolution. Do not turn that inherited default into a
+                # new unsupported /images parameter.
+                if resolution == "1K" and "resolution" not in record.get("supported_parameters", {}):
+                    resolution = "auto"
+                result = generate_images(
+                    key, model, prompt, reference_urls=references, aspect_ratio=ratio,
+                    resolution=resolution, quality=image_quality, background=image_background,
+                    seed=seed, timeout=timeout)
+                tensors = []
+                for raw in result["images"]:
+                    with Image.open(io.BytesIO(raw)) as img:
+                        mode = "RGBA" if "A" in img.getbands() or "transparency" in img.info else "RGB"
+                        array = np.asarray(img.convert(mode), dtype=np.float32) / 255.0
+                        tensors.append(torch.from_numpy(array.copy()).unsqueeze(0))
+                if not tensors:
+                    raise ValueError("OpenRouter returned no raster images")
+                image = torch.cat(tensors, dim=0)
+                video = None
+            else:
+                from .openrouter_video import generate_video
+                self.last_video_job_id = video_job_id.strip()
+                result = generate_video(
+                    key, model, prompt, reference_urls=references, mode=video_mode,
+                    duration=video_duration, resolution=video_resolution, aspect_ratio=ratio,
+                    generate_audio=video_generate_audio, seed=seed, request_timeout=timeout,
+                    wait_timeout=video_wait_timeout, job_id=video_job_id,
+                    on_job=lambda job: self._remember_video_job(job, unique_id))
+                image, video = placeholder, result["video"]
+            usage = result.get("usage") or {}
+            stats = f"Model: {model}"
+            cost = result.get("cost", usage.get("cost"))
+            if isinstance(cost, (int, float)):
+                stats += f", Cost: ${cost:.6f}"
+            if result.get("job_id"):
+                stats += f", Job: {result['job_id']}"
+            return (result.get("text", ""), image, stats, self.fetch_credits(key, timeout=timeout), video)
+        except Exception as error:
+            message = self._safe_error(error, key)
+            if request_type == "video" and self.last_video_job_id:
+                if f"video_job_id={self.last_video_job_id}" not in message:
+                    message += f" | resume with video_job_id={self.last_video_job_id}"
+            if request_type == "video":
+                # A None VIDEO causes a misleading error in downstream SaveVideo
+                # and caches the failed generation as a successful node result.
+                failure = RuntimeError(f"OpenRouter video error: {message}")
+                failure.openrouter_job_id = self.last_video_job_id
+                raise failure from None
+            return (f"Error: {message}", placeholder, "Stats N/A due to error", "Credits N/A due to error", None)
+
+    def _generate_chat(self, api_key, system_prompt, user_message_box, model,
                          web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                          request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
-                         pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
+                         pdf_data=None, user_message_input=None, reasoning_effort="auto",
+                         service_tier="auto", audio_content=None, capabilities=None, **kwargs):
         """
         Sends a completion request to the OpenRouter chat completion endpoint.
         Handles text, optional image, and optional PDF inputs.
@@ -267,7 +469,7 @@ class OpenRouterNode:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/yourusername/comfyui-openrouter",
+            "HTTP-Referer": "https://github.com/gabe-init/ComfyUI-Openrouter_node",
             "X-Title": "ComfyUI OpenRouter LLM Node",
         }
 
@@ -277,7 +479,7 @@ class OpenRouterNode:
         validated_reasoning_effort = self.validate_reasoning_effort(reasoning_effort)
 
         # Decide whether to use user_message_input or user_message_box
-        user_text = user_message_input if user_message_input is not None and user_message_input.strip() else user_message_box
+        user_text = user_message_input if user_message_input is not None else user_message_box
 
         # Initialize session_path
         session_path = None
@@ -305,10 +507,12 @@ class OpenRouterNode:
             "type": "text",
             "text": user_text
         })
+        if audio_content is not None:
+            user_content_blocks.append(audio_content)
 
         # 2. Add Image parts (optional) - support multiple images from kwargs
         # Process all image_N inputs from kwargs
-        image_keys = sorted([k for k in kwargs.keys() if k.startswith('image_')], 
+        image_keys = sorted([k for k in kwargs if re.fullmatch(r'image_\d+', k)],
                            key=lambda x: int(x.split('_')[1]))
         
         for image_key in image_keys:
@@ -401,6 +605,16 @@ class OpenRouterNode:
         }
         if validated_reasoning_effort != "auto":
             data["reasoning"] = {"effort": validated_reasoning_effort}
+        if service_tier != "auto":
+            data["service_tier"] = service_tier
+
+        capabilities = capabilities or {}
+        output_modalities = capabilities.get("architecture", {}).get("output_modalities", [])
+        if "image" in output_modalities:
+            data["modalities"] = [m for m in ("text", "image") if m in output_modalities]
+            config = self._chat_image_config(capabilities.get("id", model), aspect_ratio, image_resolution)
+            if config:
+                data["image_config"] = config
 
         print(f"Payload: model={modified_model}")
 
@@ -433,9 +647,6 @@ class OpenRouterNode:
             end_time = time.time()
 
             result = response.json()
-            # Debug: print truncated response to see what OpenRouter returned
-            debug_str = json.dumps(result, default=str)
-            print(f"API response ({len(debug_str)} chars): {debug_str[:500]}")
 
             # --- Extract results and calculate stats ---
             if not result.get("choices") or not result["choices"][0].get("message"):
@@ -443,7 +654,7 @@ class OpenRouterNode:
 
             # Parse response for text and image content
             message = result["choices"][0]["message"]
-            text_output = message.get("content", "")
+            text_output = message.get("content") or ""
             image_tensor = placeholder_image
 
             # Check for images in the separate images field (OpenRouter format)
@@ -463,7 +674,7 @@ class OpenRouterNode:
                         except Exception as e:
                             print(f"Error decoding image: {e}")
                     else:
-                        print(f"Image URL format not supported: {image_url[:50]}...")
+                        raise ValueError("Chat image response must contain encoded image data.")
                 except Exception as e:
                     print(f"Error processing images from response: {e}")
             else:
@@ -524,6 +735,10 @@ class OpenRouterNode:
                  stats_text += f", PDF Engine: {pdf_engine}"
             if validated_reasoning_effort != "auto":
                  stats_text += f", Reasoning: {validated_reasoning_effort}"
+            if result.get("service_tier"):
+                stats_text += f", Service tier: {result['service_tier']}"
+            if isinstance(api_usage.get("cost"), (int, float)):
+                stats_text += f", Cost: ${api_usage['cost']:.6f}"
 
 
             # Fetch credits information AFTER the main request
@@ -544,13 +759,9 @@ class OpenRouterNode:
             return (text_output, image_tensor, stats_text, credits_text)
 
         except requests.exceptions.RequestException as e:
-            error_message = f"API Request Error: {str(e)}"
+            error_message = f"API Request Error: {self._safe_error(e, api_key)}"
             if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    error_message += f" | Details: {error_detail}"
-                except json.JSONDecodeError:
-                    error_message += f" | Status: {e.response.status_code} | Response: {e.response.text[:200]}"
+                error_message += f" | Status: {e.response.status_code}"
             else:
                  error_message += " (Network or connection issue)"
             print(f"ERROR: {error_message}")
@@ -571,14 +782,16 @@ class OpenRouterNode:
         # Remove batch dimension if present
         if image.ndim == 4:
             if image.shape[0] != 1:
-                 print(f"Warning: Image batch size is {image.shape[0]}, using only the first image.")
+                 raise ValueError("Connect one image per numbered input; image batches are not supported.")
             image = image.squeeze(0) # Shape HWC
 
         if image.ndim != 3:
              raise ValueError(f"Unexpected image dimensions: {image.shape}. Expected HWC.")
 
         # Convert float tensor (0-1) to numpy array (0-255, uint8)
-        image_np = image.cpu().numpy()
+        image_np = image.detach().cpu().float().numpy()
+        if not np.isfinite(image_np).all():
+            raise ValueError("Image contains non-finite values")
         if image_np.dtype != np.uint8:
              if image_np.min() < 0 or image_np.max() > 1:
                   print("Warning: Image tensor values outside [0, 1] range. Clamping.")
@@ -586,7 +799,9 @@ class OpenRouterNode:
              image_np = (image_np * 255).astype(np.uint8)
 
         # Convert numpy array to PIL Image
-        pil_image = Image.fromarray(image_np, 'RGB') # Assuming RGB, adjust if needed
+        if image_np.shape[-1] not in (3, 4):
+            raise ValueError("Image must contain RGB or RGBA channels")
+        pil_image = Image.fromarray(image_np)
 
         # Save PIL Image to a bytes buffer as PNG
         buffered = io.BytesIO()
@@ -669,14 +884,22 @@ class OpenRouterNode:
     def IS_CHANGED(cls, api_key, system_prompt, user_message_box, model,
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                    request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
-                   pdf_data=None, user_message_input=None, reasoning_effort="auto", **kwargs):
+                   pdf_data=None, user_message_input=None, reasoning_effort="auto",
+                   audio_data=None, request_type="chat", service_tier="auto",
+                   image_quality="auto", image_background="auto", video_mode="text_to_video",
+                   video_duration="auto", video_resolution="auto", video_generate_audio=False,
+                   video_wait_timeout=900, video_job_id="", **kwargs):
         """
         Check if any input that affects the output has changed.
         Includes hashing image and PDF data.
         """
+        if request_type == "video" and video_job_id.strip():
+            # Recovery must work even if original media disappeared or changed.
+            return float("nan")  # Poll again after a previous local timeout.
+
         # Hash image data if present - handle multiple images from kwargs
         image_hashes = []
-        image_keys = sorted([k for k in kwargs.keys() if k.startswith('image_')], 
+        image_keys = sorted([k for k in kwargs if re.fullmatch(r'image_\d+', k)],
                            key=lambda x: int(x.split('_')[1]))
         
         for image_key in image_keys:
@@ -685,11 +908,13 @@ class OpenRouterNode:
                 if isinstance(image, torch.Tensor):
                     try:
                         hasher = hashlib.sha256()
-                        hasher.update(image.cpu().numpy().tobytes())
+                        normalized = image.detach().cpu().float().contiguous()
+                        hasher.update(str(tuple(normalized.shape)).encode())
+                        hasher.update(normalized.numpy().tobytes())
                         image_hashes.append(hasher.hexdigest())
                     except Exception as e:
                         print(f"Warning: Could not hash {image_key} data for IS_CHANGED: {e}")
-                        image_hashes.append(f"{image_key}_hashing_error")
+                        raise ValueError(f"Could not hash {image_key}") from e
                 else:
                     image_hashes.append(None)
 
@@ -731,15 +956,22 @@ class OpenRouterNode:
         # Use primitive types where possible for reliable hashing/comparison
         # Note: api_key here is the UI value only. Keys resolved from the LLM_KEY
         # env var or openrouter_api_key.json are intentionally NOT part of the
-        # cache key — they're treated as user environment, not workflow inputs.
-        return (api_key, system_prompt, user_message_box, model,
+        # cache key â€” they're treated as user environment, not workflow inputs.
+        audio_hash = None
+        if audio_data is not None:
+            from .openrouter_audio import audio_fingerprint
+            audio_hash = audio_fingerprint(audio_data)
+        return (hashlib.sha256(api_key.encode()).hexdigest(), system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
                 timeout_int, aspect_ratio, image_resolution, seed, validated_reasoning_effort,
-                tuple(image_hashes), pdf_hash, user_message_input)
+                tuple(image_hashes), pdf_hash, user_message_input, audio_hash, request_type, service_tier,
+                image_quality, image_background, video_mode, video_duration, video_resolution,
+                video_generate_audio, video_wait_timeout, video_job_id)
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
-    "OpenRouterNode": OpenRouterNode
+    "OpenRouterNode": OpenRouterNode,
+    "openrouter_node": OpenRouterNode
 }
 
 # Node display name mappings

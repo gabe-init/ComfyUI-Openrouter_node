@@ -15,7 +15,8 @@ const TypeSlotEvent = {
     Disconnect: false,
 };
 
-const NODE_ID = "OpenRouterNode";
+const NODE_IDS = new Set(["OpenRouterNode", "openrouter_node"]);
+const isImageSlot = name => /^image(?:_\d*)?$/.test(name);
 const PREFIX = "image";
 const TYPE = "IMAGE";
 
@@ -23,7 +24,7 @@ app.registerExtension({
     name: 'OpenRouter.DynamicImageInputs',
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         // Skip if not our node
-        if (nodeData.name !== NODE_ID) {
+        if (!NODE_IDS.has(nodeData.name)) {
             return
         }
 
@@ -54,14 +55,15 @@ app.registerExtension({
             const me = onConnectionsChange?.apply(this, arguments);
 
             if (slotType === TypeSlot.Input) {
+                node_slot ||= this.inputs?.[slot_idx];
                 // Only process image inputs
-                if (node_slot && !node_slot.name.startsWith(PREFIX)) {
+                if (!node_slot || !isImageSlot(node_slot.name)) {
                     return me;
                 }
                 
                 if (link_info && event === TypeSlotEvent.Connect) {
                     // Get the parent (left side node) from the link
-                    const fromNode = this.graph._nodes.find(
+                    const fromNode = this.graph?.getNodeById?.(link_info.origin_id) || this.graph?._nodes?.find(
                         (otherNode) => otherNode.id == link_info.origin_id
                     )
 
@@ -84,15 +86,15 @@ app.registerExtension({
                 
                 for(const slot of this.inputs) {
                     // Skip non-image inputs
-                    if (!slot.name.startsWith(PREFIX)) {
+                    if (!isImageSlot(slot.name)) {
                         idx += 1;
                         continue;
                     }
                     
                     // Mark empty image slots for removal (except the last one)
-                    if (slot.link === null && idx < this.inputs.length - 1) {
+                    if (slot.link == null && idx < this.inputs.length - 1) {
                         toRemove.push(idx);
-                    } else if (slot.link !== null) {
+                    } else if (slot.link != null) {
                         // Connected slot - update its name with proper index
                         const name = slot.name.split('_')[0];
                         let count = (slot_tracker[name] || 0) + 1;
@@ -111,14 +113,14 @@ app.registerExtension({
                 // Check if the last input is an image input
                 let lastInput = null;
                 for (let i = this.inputs.length - 1; i >= 0; i--) {
-                    if (this.inputs[i].name.startsWith(PREFIX)) {
+                    if (isImageSlot(this.inputs[i].name)) {
                         lastInput = this.inputs[i];
                         break;
                     }
                 }
                 
                 // If there's no empty image slot at the end, or no image slots at all, add one
-                if (!lastInput || lastInput.link !== null) {
+                if (!lastInput || lastInput.link != null) {
                     this.addInput(PREFIX, TYPE);
                     // Set the unconnected slot to appear gray
                     const newSlot = this.inputs[this.inputs.length - 1];

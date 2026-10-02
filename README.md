@@ -4,6 +4,16 @@ A custom node for ComfyUI that allows you to interact with OpenRouter's API, pro
 
 ## Updates
 
+### 10/1/2026 - Image, Video and Audio Updates
+
+- Added dedicated image models (including Flux) and model-supported image controls
+- Added video generation to the existing node, with first/last frames, references, and job recovery
+- Added audio input with validated WAV encoding and explicit service tiers for chat
+- Fixed saved workflow compatibility, background model refresh, and API key serialization
+
+Thanks @ArthurReboulSalze and @djdookie for the catalog/video and audio contributions.
+
+
 ### 5/18/2026
 
 Reasoning effort setting added. Make sure the model supports reasoning when using
@@ -38,9 +48,9 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 
 ## Features
 
-- Access to all models available on OpenRouter
+- Current chat, image, and supported video models from OpenRouter's catalogs
 - Support for multiple image inputs (up to 10 images) 
-- **NEW: Image generation support** - Generate images with models like google/gemini-2.5-flash-image-preview (Nano-Banana)
+- **Image generation** - Dedicated OpenRouter Image API with current image models and supported settings
 - Dynamic image input visibility - additional inputs appear as you connect images
 - PDF support with multiple OCR engine options
 - Web search capability with `:online` modifier
@@ -49,6 +59,9 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 - Detailed statistics on token usage and generation speed
 - Real-time OpenRouter account balance display
 - **Chat Mode** - Maintain conversation context across multiple messages with automatic session management
+- **Video generation** - Text, first frame, first/last frames, and image references with a native VIDEO output
+- **Audio input** - Connect Load Audio to the optional audio_data input in chat mode
+- **Background catalogs** - Model lists refresh without blocking ComfyUI
 
 ## Installation
 
@@ -72,7 +85,7 @@ The OpenRouter node provides a simple interface to interact with various LLMs th
 ### API Key Security
 
 > [!WARNING]
-> Entering your API key directly into the node's input field in ComfyUI will embed it in the **workflow metadata** of every image you save. This is a security risk if you share your images.
+> Prefer server-side key loading. This extension clears the key field from saved workflow widget values, but a manually entered key is still sent in the execution request and may appear in API-format prompts or other extensions' metadata. Check older workflows and exported files before sharing them.
 
 To keep your API key secure, use one of the following methods:
 
@@ -86,7 +99,7 @@ To keep your API key secure, use one of the following methods:
     - The node will automatically pick it up if the UI field is empty.
 
 > [!NOTE]
-> If you've ever typed your key into the **api_key** field, clear it before saving the workflow — the value is stored in the workflow JSON. On Linux/macOS, restrict the JSON config with `chmod 600 openrouter_api_key.json` so only your user can read it.
+> Key precedence is the nonempty UI field, then `LLM_KEY`, then `openrouter_api_key.json`. On Linux/macOS, restrict the JSON config with `chmod 600 openrouter_api_key.json` so only your user can read it.
 
 ### Inputs
 
@@ -95,19 +108,30 @@ To keep your API key secure, use one of the following methods:
 - **api_key**: Your OpenRouter API key. Can be left blank if provided via `openrouter_api_key.json` or `LLM_KEY` environment variable.
 - **system_prompt**: The system prompt that sets the behavior of the LLM.
 - **user_message_box**: The user message to send to the LLM.
-- **model**: The model to use for generation. The node automatically fetches the list of available models from OpenRouter.
-- **web_search**: Enable web search capability by appending `:online` to the model ID. This costs $4 per 1000 queries and automatically uses your openrouter balance.
+- **model**: The model to use for generation. The node fetches current models for the selected request type in the background. Refresh Models requests a fresh catalog without changing your selections.
+- **web_search**: Enable web search capability by appending `:online` to the model ID. Search availability and pricing depend on the selected model and provider; check OpenRouter's current pricing.
 - **cheapest**: Route to the cheapest provider by appending `:floor` to the model ID (enabled by default).
 - **fastest**: Route to the fastest provider by appending `:nitro` to the model ID (disabled by default).
 - **temperature**: Controls the randomness of the model's output (0.0 to 2.0).
 - **reasoning_effort**: Controls OpenRouter's unified reasoning parameter. `auto` sends no override and lets OpenRouter/model defaults apply. `none` explicitly disables reasoning. `minimal`, `low`, `medium`, `high`, and `xhigh` request increasing reasoning effort where the selected model supports it.
 - **chat_mode**: Enable conversation mode to maintain context across messages (disabled by default).
-- **request_timeout**: Maximum time, in seconds, to wait for the main OpenRouter completion request before returning an error (default: 120).
+- **request_timeout**: HTTP connection/read timeout in seconds (default: 120). This detects stalled requests; it is not a strict wall-clock limit for DNS resolution or a response that keeps delivering data.
 
 > [!NOTE]
 > OpenRouter normalizes reasoning across providers, but behavior still depends on the selected model. Some providers map effort levels to token budgets, Gemini 3 maps effort to Google's thinking levels, `xhigh` may be mapped down when unsupported, and some reasoning models do not return visible reasoning tokens.
 
 #### Optional Inputs:
+
+- **request_type**: `chat` (default), `image`, or `video`. Existing workflows default to chat.
+- **service_tier**: `auto` omits the override; `default`, `flex`, `priority`, and `ultrafast` explicitly request a chat service tier. Cheapest/fastest routing remains separate. Availability and pricing vary: models without flex endpoints use standard rates, while capacity errors on existing flex endpoints do not fall back to standard. Priority/ultrafast can fall back to standard. The returned tier appears in Stats. See [OpenRouter service tiers](https://openrouter.ai/docs/guides/features/service-tiers).
+- **image_quality / image_background**: Image API controls filtered using the selected model's published capabilities. `auto` leaves the choice to the provider. Unsupported explicit settings fail before submission. GPT-5.4 Image2 does not advertise 1K/2K/4K resolution controls.
+- **audio_data**: One native ComfyUI AUDIO clip, connected from Load Audio. Mono/stereo only; native audio is encoded as PCM16 WAV. Programmatic callers may also provide `{filename, bytes, format?}`. Empty data, unknown formats, unsupported batches/channels, and invalid samples are rejected. The selected chat model must support audio input; formats vary by provider.
+- **video_mode**: `text_to_video` (no images), `first_frame` (one image), `first_last_frame` (two images), or `reference_images` (model-supported references). Connect one image per numbered input.
+- **video_duration / video_resolution**: `auto` or a value supported by the chosen video model. Video uses the shared aspect-ratio and seed controls where supported.
+- **video_generate_audio**: Request generated sound when the video model supports it.
+- **video_wait_timeout**: Video wait budget in seconds, default 900. Polling and downloads check this deadline and shorten connection/read timeouts to the remaining budget; an in-progress DNS lookup or continuously arriving HTTP headers can still delay interruption.
+- **video_job_id**: Resume an already-submitted job without paying for another submission. Copy the ID from Output or the error message. Recovery ignores the original prompt and media inputs.
+
 
 - **image_1** through **image_10**: Multiple image inputs for multimodal models. The first image input (image_1) is always visible. Additional image inputs automatically appear as you connect images (up to 10 total).
 - **pdf_data**: PDF document input for models that support document understanding.
@@ -120,6 +144,7 @@ To keep your API key secure, use one of the following methods:
 - **image**: An image tensor if the response contains a generated image, otherwise returns an empty tensor.
 - **Stats**: A string detailing tokens per second, input tokens, output tokens, temperature, and the model used.
 - **Credits**: A string showing your remaining OpenRouter account balance (e.g., "Remaining: $9.792").
+- **video**: Native ComfyUI VIDEO output, appended after the original four outputs. Connect it to Save Video. Video requires ComfyUI 0.3.31+ with PyAV; chat/image remain available on older installations.
 
 Note: To display the output text in ComfyUI, you can use the ShowText nodes from [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts), but any text display node will work.
 
@@ -131,7 +156,7 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 2. Provide your API key (see [API Key Security](#api-key-security))
 3. Set a system prompt (e.g., "You are a helpful assistant.")
 4. Enter a user message (e.g., "Explain quantum computing in simple terms.")
-5. Select a model (e.g., "openai/gpt-4")
+5. Select a current chat model from the model list
 6. Run the workflow
 
 ### Image Understanding
@@ -141,14 +166,14 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 3. Provide your API key (see [API Key Security](#api-key-security))
 4. Set a system prompt (e.g., "You are a helpful assistant.")
 5. Enter a user message (e.g., "Describe this image in detail.")
-6. Select a multimodal model (e.g., "openai/gpt-4-vision" or "anthropic/claude-3-opus-20240229")
+6. Select a current chat model that supports image input
 7. Run the workflow
 
 ### Multiple Image Analysis
 
 1. Connect your first image to "image_1"
 2. As soon as you connect it, "image_2" will automatically appear
-3. Connect additional images as needed (up to 6 total)
+3. Connect additional images as needed (one image per input; model limits apply)
 4. Unused image inputs will automatically hide when disconnected
 5. Enter a prompt that references multiple images (e.g., "Compare these images and describe the differences.")
 6. Select a multimodal model that supports multiple images
@@ -158,15 +183,27 @@ Note: To display the output text in ComfyUI, you can use the ShowText nodes from
 
 ### Image Generation
 
-1. Add the OpenRouter node to your workflow
-2. Provide your API key (see [API Key Security](#api-key-security))
-3. Set a system prompt (e.g., "You are a helpful assistant.")
-4. Enter a user message with generation keywords (e.g., "Generate a beautiful sunset over mountains", "Create an image of a futuristic city", "Draw a cat wearing a hat")
-5. Select an image-capable model (e.g., "google/gemini-2.5-flash-image-preview" - also known as Nano-Banana)
-6. Run the workflow
-7. The generated image will appear in the "image" output, which you can connect to preview nodes or other image processing nodes
+1. Set **request_type** to `image` and select an image model.
+2. Enter a prompt; connect image inputs for reference/editing requests where supported.
+3. Choose supported aspect ratio, resolution, quality, or background settings, or leave them on `auto`.
+4. Connect **image** to Preview Image or Save Image and run the workflow.
 
-**Note**: The node automatically detects image generation requests based on keywords like "generate", "create", "draw", "make", "produce", "design", "render", "image of", "picture of", "photo of". For image generation, use models that support image output modalities.
+Image-only models use the dedicated [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation). Conversational models can still return images in chat mode. Settings differ by model; the node does not invent resolution support or promise exact dimensions from the old aspect-ratio labels.
+
+### Video Generation
+
+1. Set **request_type** to `video` and select a supported generation model.
+2. Choose the video mode and connect the required numbered images.
+3. Set supported duration, resolution, aspect ratio, and optional generated audio.
+4. Connect **video** to Save Video and run the workflow.
+
+The node submits once, waits for the job, then downloads and validates native video. It reports actual returned cost when available; no speculative estimate is shown. Editing/upscaling/avatar models requiring unsupported inputs are excluded.
+
+Stopping ComfyUI or reaching the local timeout does not necessarily cancel the remote job. The node remembers the last accepted job in workflow properties; click **Resume Last Video** to fill **video_job_id**, then run again. You can also paste an ID from Output or the server log. Clear **video_job_id** before starting a new generation. If submission failed before returning an ID, check OpenRouter activity before submitting again. Downloads are limited to 512 MiB.
+
+### Audio Input
+
+Connect **Load Audio → audio_data**, select an audio-capable chat model, and enter an instruction such as “describe this audio.” One mono/stereo clip is accepted per run. Audio is only supported in chat mode.
 
 ### Chat Mode
 
@@ -221,7 +258,7 @@ python manage_chats.py clean -d 30
 
 ## Troubleshooting
 
-- **Model list not loading**: Check your internet connection and OpenRouter API key.
+- **Model list not loading**: Check your internet connection and click Refresh Models. Public catalog discovery does not require an API key; a failed refresh retains the last successful data.
 - **Error in response**: Check the error message in the output. It might be due to an invalid API key, model unavailability, or other API issues.
 - **Slow responses**: Try using the `:nitro` modifier by enabling the "fastest" option.
 - **Token counting issues**: The node uses tiktoken for accurate token counting, but falls back to an estimation method if there's an issue.
@@ -254,6 +291,3 @@ SOFTWARE.
 
 - [OpenRouter](https://openrouter.ai/) 
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 
-
-
-
