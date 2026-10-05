@@ -11,13 +11,14 @@ import torch
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "openrouter_audio.py"
 _SPEC = importlib.util.spec_from_file_location("openrouter_audio_tests", _MODULE_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
 audio = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(audio)
 
 
 class AudioTests(unittest.TestCase):
     @staticmethod
-    def native(waveform=None, sample_rate=16000):
+    def native(waveform=None, sample_rate: object = 16000):
         return {
             "waveform": waveform if waveform is not None else torch.zeros((1, 1, 16)),
             "sample_rate": sample_rate,
@@ -46,6 +47,38 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(first["fingerprint"], audio.audio_fingerprint(value))
         params, _pcm = self.read_wav(first)
         self.assertEqual((params.nchannels, params.nframes), (1, 16))
+
+    def test_oversized_native_clip_falls_back_to_mp3(self):
+        # A WAV this long would exceed OpenRouter's request size limit (413);
+        # compress instead of sending raw PCM.
+        samples = audio._MAX_WAV_BYTES // 4 + 1000  # stereo PCM16 = 4 bytes/sample
+        waveform = torch.zeros((1, 2, samples))
+        prepared = audio.prepare_audio(self.native(waveform, sample_rate=44100))
+        block = prepared["block"]["input_audio"]
+        self.assertEqual(block["format"], "mp3")
+        mp3_bytes = base64.b64decode(block["data"], validate=True)
+        self.assertLess(len(mp3_bytes), samples * 4)
+        self.assertEqual(prepared["fingerprint"], audio.audio_fingerprint(self.native(waveform, sample_rate=44100)))
+
+    def test_encoding_mp3_skips_wav_even_for_tiny_clips(self):
+        value = self.native()
+        prepared = audio.prepare_audio(value, encoding="mp3")
+        self.assertEqual(prepared["block"]["input_audio"]["format"], "mp3")
+        self.assertEqual(
+            prepared["fingerprint"], audio.audio_fingerprint(value, encoding="mp3"),
+        )
+        # A different encoding choice must not collide with the "auto" fingerprint.
+        self.assertNotEqual(prepared["fingerprint"], audio.audio_fingerprint(value))
+
+    def test_encoding_wav_forces_wav_even_for_oversized_clips(self):
+        samples = audio._MAX_WAV_BYTES // 4 + 1000
+        waveform = torch.zeros((1, 2, samples))
+        prepared = audio.prepare_audio(self.native(waveform, sample_rate=44100), encoding="wav")
+        self.assertEqual(prepared["block"]["input_audio"]["format"], "wav")
+
+    def test_rejects_unknown_encoding(self):
+        with self.assertRaises(ValueError):
+            audio.prepare_audio(self.native(), encoding="ogg")
 
     def test_noncontiguous_and_gradient_tensor_is_detached_without_mutation(self):
         waveform = torch.linspace(-1, 1, 32).reshape(1, 2, 16)[:, :, ::2].requires_grad_()
@@ -80,10 +113,18 @@ class AudioTests(unittest.TestCase):
                     audio.prepare_audio(self.native(waveform))
 
     def test_rejects_nonfinite_or_unnormalized_samples(self):
-        for sample in (float("nan"), float("inf"), -float("inf"), 1.01, -1.01):
+        for sample in (float("nan"), float("inf"), -float("inf")):
             with self.subTest(sample=sample):
                 with self.assertRaises(ValueError):
                     audio.prepare_audio(self.native(torch.tensor([[[sample]]])))
+
+    def test_slight_overshoot_is_clamped_not_rejected(self):
+        # Lossy codecs (MP3/AAC) can decode with slight overshoot above 1.0;
+        # PCM16 quantization clamps anyway, so this must not fail the node.
+        for sample in (1.01, -1.01):
+            with self.subTest(sample=sample):
+                prepared = audio.prepare_audio(self.native(torch.tensor([[[sample]]])))
+                self.assertEqual(prepared["block"]["input_audio"]["format"], "wav")
 
     def test_rejects_invalid_sample_rates(self):
         for rate in (True, False, 0, -16000, 16000.0, "16000", None, 2**32):

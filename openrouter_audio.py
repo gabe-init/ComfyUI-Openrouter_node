@@ -21,6 +21,11 @@ SUPPORTED_AUDIO_FORMATS = frozenset(
 _EXTENSION_FORMATS = {name: name for name in SUPPORTED_AUDIO_FORMATS}
 _EXTENSION_FORMATS["aif"] = "aiff"
 
+# PCM16 WAV above this size (base64 inflates it ~33%) risks a 413 from OpenRouter's
+# gateway; MP3-compress long clips instead of sending raw, uncompressed PCM.
+_MAX_WAV_BYTES = 15 * 1024 * 1024
+_MP3_BIT_RATE = 128000
+
 
 def _detected_format(data):
     """Recognize common container signatures without pretending to decode them."""
@@ -94,7 +99,29 @@ def _raw_audio(audio):
     return data, audio_format, {"kind": "file", "format": audio_format}
 
 
-def _native_audio(audio):
+def _mp3_encode(waveform, channels, sample_rate):
+    """Compress a [channels, samples] float32 waveform to MP3 bytes via PyAV."""
+    import av  # ComfyUI ships PyAV; import lazily, only needed for large clips.
+
+    layout = "mono" if channels == 1 else "stereo"
+    buffer = io.BytesIO()
+    container = av.open(buffer, mode="w", format="mp3")
+    stream = container.add_stream("libmp3lame", rate=sample_rate, layout=layout)
+    stream.bit_rate = _MP3_BIT_RATE  # type: ignore[reportAttributeAccessIssue]
+    frame = av.AudioFrame.from_ndarray(
+        waveform.transpose(0, 1).reshape(1, -1).numpy(), format="flt", layout=layout,
+    )
+    frame.sample_rate = sample_rate
+    frame.pts = 0
+    container.mux(stream.encode(frame))  # type: ignore[reportAttributeAccessIssue]
+    container.mux(stream.encode(None))  # type: ignore[reportAttributeAccessIssue]
+    container.close()
+    return buffer.getvalue()
+
+
+def _native_audio(audio, encoding="auto"):
+    if encoding not in ("auto", "wav", "mp3"):
+        raise ValueError("Audio encoding must be 'auto', 'wav', or 'mp3'.")
     waveform = audio.get("waveform")
     sample_rate = audio.get("sample_rate")
     if not isinstance(waveform, torch.Tensor) or not waveform.is_floating_point():
@@ -119,7 +146,26 @@ def _native_audio(audio):
     if not bool(torch.isfinite(waveform).all()):
         raise ValueError("Native AUDIO waveform must contain only finite samples.")
     if bool((waveform.abs() > 1).any()):
-        raise ValueError("Native AUDIO samples must be normalized to the range [-1, 1].")
+        # Lossy codecs (MP3/AAC) can decode with slight overshoot above 1.0;
+        # PCM16 quantization clamps anyway, so warn and clamp instead of failing.
+        print("Warning: Native AUDIO samples outside [-1, 1] detected; clamping to the valid range.")
+        waveform = waveform.clamp_(-1.0, 1.0)
+
+    if encoding == "mp3":
+        # Forced MP3: skip building a WAV buffer that would only be discarded.
+        try:
+            mp3_bytes = _mp3_encode(waveform[0], channels, sample_rate)
+        except Exception as error:
+            raise ValueError(
+                "audio_encoding is set to 'mp3' but MP3 compression is unavailable "
+                "(PyAV/libmp3lame missing?). Switch audio_encoding to 'auto' or 'wav'."
+            ) from error
+        return mp3_bytes, "mp3", {
+            "kind": "native_mp3",
+            "format": "mp3",
+            "shape": [batch, channels, samples],
+            "sample_rate": sample_rate,
+        }
 
     # Preserve channels and duration; PCM is interleaved by sample, not channel.
     samples_array = waveform[0].transpose(0, 1).numpy()
@@ -131,7 +177,24 @@ def _native_audio(audio):
         output.setsampwidth(2)
         output.setframerate(sample_rate)
         output.writeframes(pcm_bytes)
-    return buffer.getvalue(), "wav", {
+    wav_bytes = buffer.getvalue()
+
+    if encoding == "auto" and len(wav_bytes) > _MAX_WAV_BYTES:
+        try:
+            mp3_bytes = _mp3_encode(waveform[0], channels, sample_rate)
+        except Exception as error:
+            raise ValueError(
+                f"Native AUDIO clip is too large to send as WAV ({len(wav_bytes)} bytes) "
+                "and MP3 compression is unavailable. Trim the clip or install PyAV/ffmpeg."
+            ) from error
+        return mp3_bytes, "mp3", {
+            "kind": "native_mp3",
+            "format": "mp3",
+            "shape": [batch, channels, samples],
+            "sample_rate": sample_rate,
+        }
+
+    return wav_bytes, "wav", {
         "kind": "native",
         "format": "wav",
         "shape": [batch, channels, samples],
@@ -139,14 +202,14 @@ def _native_audio(audio):
     }
 
 
-def _normalize_audio(audio_data):
+def _normalize_audio(audio_data, encoding="auto"):
     if not isinstance(audio_data, dict):
         raise ValueError("Audio input must be a native AUDIO dictionary or a dictionary of file bytes.")
     if "waveform" in audio_data or "sample_rate" in audio_data:
         if "bytes" in audio_data:
             raise ValueError("Audio input must not mix native waveform and raw file bytes.")
-        return _native_audio(audio_data)
-    return _raw_audio(audio_data)
+        return _native_audio(audio_data, encoding)
+    return _raw_audio(audio_data)  # raw files pass through unmodified regardless of encoding
 
 
 def _fingerprint(data, metadata):
@@ -157,23 +220,23 @@ def _fingerprint(data, metadata):
     return hasher.hexdigest()
 
 
-def audio_fingerprint(audio_data):
+def audio_fingerprint(audio_data, encoding="auto"):
     """Return the validated payload identity, without allocating base64 text.
 
     Invalid audio raises ValueError rather than producing a reusable error key.
     """
-    data, _audio_format, metadata = _normalize_audio(audio_data)
+    data, _audio_format, metadata = _normalize_audio(audio_data, encoding)
     return _fingerprint(data, metadata)
 
 
-def prepare_audio(audio_data):
+def prepare_audio(audio_data, encoding="auto"):
     """Return an input_audio content block and its deterministic fingerprint.
 
-    Native AUDIO is encoded as PCM16 WAV using only Python's standard library.
-    Raw files retain their original bytes. Container checks identify common
-    metadata mismatches; the provider still validates codec/file support.
+    encoding: "auto" (WAV, MP3 only above ~15 MB), "wav" (always WAV), or
+    "mp3" (always MP3, skips building a WAV that would be discarded). Raw
+    file bytes always pass through unmodified regardless of this setting.
     """
-    data, audio_format, metadata = _normalize_audio(audio_data)
+    data, audio_format, metadata = _normalize_audio(audio_data, encoding)
     return {
         "block": {
             "type": "input_audio",

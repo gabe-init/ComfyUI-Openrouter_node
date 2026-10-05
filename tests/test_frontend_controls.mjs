@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { NODE_IDS, migrateWorkflow, WIDGET_NAMES, visibleInMode, modelOptions, scrubSerializedKey } from "../web/openrouter_workflow.js";
+import { NODE_IDS, migrateWorkflow, migrateNodeWidgets, WIDGET_NAMES, visibleInMode, modelOptions, scrubSerializedKey } from "../web/openrouter_workflow.js";
 
 const old = JSON.parse(fs.readFileSync(new URL("../examples/chat_mode_example.json", import.meta.url)));
 const before = structuredClone(old);
@@ -23,7 +23,8 @@ const current = {nodes: [{id: 1, type: "OpenRouterNode", widgets_values: [...cur
 migrateWorkflow(current);
 assert.deepEqual(current.nodes[0].widgets_values.slice(0, currentValues.length), currentValues);
 assert.equal(current.links[0][2], 2, "current Stats links must not move");
-assert.equal(current.nodes[0].widgets_values[16], "chat");
+assert.equal(current.nodes[0].widgets_values[WIDGET_NAMES.indexOf("audio_encoding")], "auto");
+assert.equal(current.nodes[0].widgets_values[WIDGET_NAMES.indexOf("request_type")], "chat");
 
 // Real historical INPUT_TYPES orders from b7501e7, d481e92 and ab115ee.
 for (const [tail, expected] of [
@@ -38,6 +39,35 @@ for (const [tail, expected] of [
         assert.equal(historicalImage.nodes[0].widgets_values[WIDGET_NAMES.indexOf(name)], value, `legacy ${name}`);
     }
     assert.equal(historicalImage.nodes[0].widgets_values[WIDGET_NAMES.indexOf("request_type")], "chat");
+}
+
+// A node already migrated under the pre-audio_encoding schema (cached
+// openrouter_widget_names/openrouter_schema_version) must not keep using that
+// stale cache once WIDGET_NAMES changes - it must be recomputed, not shifted.
+{
+    const v2Names = WIDGET_NAMES.filter(name => name !== "audio_encoding");
+    const v2Values = v2Names.map(name => ({
+        request_type: "image", service_tier: "flex", image_quality: "high",
+    })[name] ?? (name === "model" ? "example/model" : name === "temperature" ? 1 : "auto"));
+    const stale = {nodes: [{id: 1, type: "OpenRouterNode", widgets_values: v2Values,
+        outputs: ["Output", "image", "Stats", "Credits", "video"].map(name => ({name})),
+        properties: {openrouter_widget_names: v2Names, openrouter_schema_version: 2}}], links: []};
+    migrateWorkflow(stale);
+    const values = stale.nodes[0].widgets_values;
+    assert.equal(values[WIDGET_NAMES.indexOf("request_type")], "image", "stale cache must not shift request_type");
+    assert.equal(values[WIDGET_NAMES.indexOf("service_tier")], "flex", "stale cache must not shift service_tier");
+    assert.equal(values[WIDGET_NAMES.indexOf("audio_encoding")], "auto", "missing field falls back to its default");
+}
+
+// configure() (recreate/undo/copy-paste) never goes through beforeConfigureGraph -
+// migrateNodeWidgets must be safe to call directly on the plain info object too.
+{
+    const v2Names = WIDGET_NAMES.filter(name => name !== "audio_encoding");
+    const v2Values = v2Names.map(name => (name === "request_type" ? "video" : name === "model" ? "x" : "auto"));
+    const info = {widgets_values: v2Values, properties: {openrouter_widget_names: v2Names, openrouter_schema_version: 2}};
+    migrateNodeWidgets(info);
+    assert.equal(info.widgets_values[WIDGET_NAMES.indexOf("request_type")], "video", "configure() path must not shift request_type");
+    assert.equal(info.widgets_values[WIDGET_NAMES.indexOf("audio_encoding")], "auto");
 }
 
 assert(visibleInMode("system_prompt", "chat"));

@@ -1,6 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
-import { NODE_IDS, migrateWorkflow, visibleInMode, modelOptions, scrubSerializedKey } from "./openrouter_workflow.js";
+import { NODE_IDS, migrateWorkflow, migrateNodeWidgets, visibleInMode, modelOptions, scrubSerializedKey } from "./openrouter_workflow.js";
 
 let catalog = {chat: [], image: [], video: []};
 let inFlight;
@@ -152,6 +152,14 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             configured?.apply(this, arguments);
             update(this);
+        };
+        // configure() applies widgets_values positionally BEFORE onConfigure fires,
+        // so recreate/undo/copy-paste (which call configure() directly, never
+        // beforeConfigureGraph) would otherwise bake in stale/shifted values here.
+        const configure = nodeType.prototype.configure;
+        nodeType.prototype.configure = function (info) {
+            if (info) migrateNodeWidgets(info);
+            return configure?.apply(this, arguments);
         };
         const serialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (data) {
