@@ -1,8 +1,8 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
-import { NODE_IDS, migrateWorkflow, visibleInMode, modelOptions, scrubSerializedKey } from "./openrouter_workflow.js";
+import { NODE_IDS, migrateWorkflow, migrateNodeWidgets, visibleInMode, modelOptions, scrubSerializedKey } from "./openrouter_workflow.js";
 
-let catalog = {chat: [], image: [], video: []};
+let catalog = {chat: [], image: [], video: [], speech: []};
 let inFlight;
 const nodes = new Set();
 const validJobId = value => typeof value === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(value);
@@ -58,9 +58,10 @@ function update(node) {
     const widgets = new Map((node.widgets || []).map(w => [w.name, w]));
     const mode = widgets.get("request_type")?.value || "chat";
     const resume = !!widgets.get("video_job_id")?.value?.trim();
+    const catalogMode = mode === "audio" ? "speech" : mode;
     const model = widgets.get("model");
-    if (model) model.options.values = modelOptions(catalog, mode, model.value);
-    let record = (catalog[mode] || []).find(m => m.id === model?.value);
+    if (model) model.options.values = modelOptions(catalog, catalogMode, model.value);
+    let record = (catalog[catalogMode] || []).find(m => m.id === model?.value);
     if (!record && mode === "chat" && typeof model?.value === "string") {
         const baseId = model.value.replace(/(?::(?:floor|nitro|online))+$/, "");
         record = (catalog.chat || []).find(m => m.id === baseId);
@@ -70,6 +71,22 @@ function update(node) {
         ? (catalog.image || []).find(m => m.id === record.id) : undefined;
     const parameters = imageRecord?.supported_parameters || {};
     const imageFields = {image_resolution: "resolution", image_quality: "quality", image_background: "background", aspect_ratio: "aspect_ratio"};
+    // Audio voices come from the speech catalog's supported_voices union.
+    const voice = widgets.get("tts_voice");
+    if (voice && mode === "audio") {
+        voice.options ||= {};
+        if (!voice._openrouterValues) voice._openrouterValues = [...(voice.options?.values || ["auto"])];
+        const supported = record?.supported_voices;
+        const allowed = Array.isArray(supported) && supported.length
+            ? ["auto", ...supported.map(String)] : [...voice._openrouterValues];
+        if (!allowed.includes(voice.value)) allowed.push(voice.value);
+        voice.options.values = allowed;
+        if (!record) {
+            // No speech metadata yet (catalog still loading): request a refresh
+            // so the voice dropdown fills as soon as discovery completes.
+            refresh();
+        }
+    }
     for (const widget of node.widgets || []) {
         if (widget.name === "Resume Last Video") {
             setVisible(widget, mode === "video" && validJobId(node.properties?.openrouter_last_video_job_id));
@@ -110,7 +127,7 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const result = created?.apply(this, arguments);
             nodes.add(this);
-            for (const name of ["request_type", "model", "video_job_id"]) {
+            for (const name of ["request_type", "model", "video_job_id", "tts_voice"]) {
                 const widget = this.widgets?.find(w => w.name === name);
                 if (!widget) continue;
                 const callback = widget.callback;
@@ -150,8 +167,35 @@ app.registerExtension({
         };
         const configured = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
-            configured?.apply(this, arguments);
+            const result = configured?.apply(this, arguments);
+            // Nodes saved before a schema update may lack newer optional input
+            // sockets (tts_reference_audio, tts_reference_image, ...): sockets
+            // are instantiated at node creation from the definition. Re-add any
+            // missing ones so updated workflows keep working without a rebuild.
+            const optional = nodeData?.input?.optional || {};
+            if (optional && typeof this.addInput === "function") {
+                this.inputs ||= [];
+                for (const [name, spec] of Object.entries(optional)) {
+                    if (this.inputs.some(input => input.name === name)) continue;
+                    const kind = Array.isArray(spec) ? spec[0] : spec;
+                    const options = Array.isArray(spec) ? spec[1] : undefined;
+                    // Plain STRING widgets render as widgets, not sockets; combo
+                    // lists are widget values too. forceInput stays a socket.
+                    const isWidgetString = kind === "STRING" && !options?.forceInput;
+                    if (isWidgetString || Array.isArray(kind)) continue;
+                    this.addInput(name, typeof kind === "string" ? kind : "*");
+                }
+            }
             update(this);
+            return result;
+        };
+        // configure() applies widgets_values positionally BEFORE onConfigure fires,
+        // so recreate/undo/copy-paste (which call configure() directly, never
+        // beforeConfigureGraph) would otherwise bake in stale/shifted values here.
+        const configure = nodeType.prototype.configure;
+        nodeType.prototype.configure = function (info) {
+            if (info) migrateNodeWidgets(info);
+            return configure?.apply(this, arguments);
         };
         const serialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (data) {

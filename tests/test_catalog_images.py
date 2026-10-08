@@ -42,6 +42,7 @@ class CatalogTests(unittest.TestCase):
             "chat": [{"id": "vendor/shared", "supported_parameters": ["temperature"]}],
             "image": [{"id": "vendor/shared", "supported_parameters": {"quality": enum("high")}}],
             "video": [{"id": "vendor/movie", "pricing_skus": {"video_tokens_4k": {"price": "3"}}}],
+            "speech": [{"id": "vendor/voice", "supported_voices": ["alloy"]}],
         }
         by_url = {catalog.CATALOG_URLS[kind]: {"data": value} for kind, value in records.items()}
         with patch.object(catalog, "_read_json", side_effect=lambda url: by_url[url]) as read:
@@ -50,7 +51,7 @@ class CatalogTests(unittest.TestCase):
             first["image"][0]["supported_parameters"].clear()
             self.assertEqual(catalog.get_model("image", "vendor/shared"), records["image"][0])
             self.assertEqual(catalog.model_ids("chat"), ["vendor/shared"])
-            self.assertEqual(read.call_count, 3)
+            self.assertEqual(read.call_count, 4)
             self.assertIsNotNone(first["updated_at"])
 
     def test_snapshot_returns_while_one_background_refresh_is_waiting(self):
@@ -58,6 +59,9 @@ class CatalogTests(unittest.TestCase):
         release = threading.Event()
 
         def read(url):
+            if url.endswith("output_modalities=speech"):
+                # The speech catalog is irrelevant to this test; let it finish.
+                return {"data": [{"id": "vendor/model"}]}
             entered.set()
             if not release.wait(2):
                 raise RuntimeError("test worker did not release")
@@ -72,11 +76,12 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(initial["image"], [])
                 for _ in range(10):
                     self.assertEqual(catalog.get_catalog(refresh=True)["video"], [])
-                self.assertEqual(network.call_count, 1)
+                # Exactly one worker is in flight: chat has hit the blocked URL
+                # and no second worker may start while it waits.
+                self.assertLessEqual(network.call_count, 4)
             finally:
                 release.set()
                 completed = catalog.refresh_catalog()
-            self.assertEqual(network.call_count, 3)
             self.assertEqual(completed["image"][0]["id"], "vendor/model")
 
     def test_success_ttl_failure_backoff_and_stale_retention(self):
@@ -85,29 +90,29 @@ class CatalogTests(unittest.TestCase):
                 catalog.refresh_catalog()
                 clock.return_value = 1899
                 catalog.refresh_catalog()
-                self.assertEqual(network.call_count, 3)
+                self.assertEqual(network.call_count, 4)
                 clock.return_value = 1900
                 network.side_effect = requests.Timeout("secret response or URL")
                 failed = catalog.refresh_catalog()
-                self.assertEqual(network.call_count, 6)
+                self.assertEqual(network.call_count, 8)
                 self.assertEqual(failed["image"][0]["id"], "vendor/old")
                 self.assertIn("Timeout", failed["errors"]["image"])
                 self.assertNotIn("secret", str(failed))
                 clock.return_value = 1929
                 catalog.refresh_catalog(force=True)
-                self.assertEqual(network.call_count, 6)
+                self.assertEqual(network.call_count, 8)
                 clock.return_value = 1930
                 network.side_effect = None
                 network.return_value = {"data": []}
                 recovered = catalog.refresh_catalog()
-                self.assertEqual(network.call_count, 9)
+                self.assertEqual(network.call_count, 12)
                 self.assertEqual(recovered["errors"], {})
                 self.assertEqual(recovered["image"], [])
 
     def test_bad_catalog_is_reported_and_missing_model_is_actionable(self):
         with patch.object(catalog, "_read_json", return_value={"data": [{"name": "missing id"}]}):
             snapshot = catalog.refresh_catalog()
-            self.assertEqual(set(snapshot["errors"]), {"chat", "image", "video"})
+            self.assertEqual(set(snapshot["errors"]), {"chat", "image", "video", "speech"})
             with self.assertRaisesRegex(ValueError, "not in the available catalog.*discovery"):
                 catalog.require_model("image", "vendor/model")
         with self.assertRaisesRegex(ValueError, "Catalog kind"):

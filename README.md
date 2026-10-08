@@ -1,8 +1,16 @@
 # ComfyUI OpenRouter Node
 
-A custom node for ComfyUI that allows you to interact with OpenRouter's API, providing access to a wide range of models.  
+A custom node for ComfyUI that allows you to interact with OpenRouter's API, providing access to a wide range of models.
 
 ## Updates
+
+### 10/8/2026 - Audio Output (TTS)
+
+- Added audio generation via OpenRouter's `/api/v1/audio/speech` endpoint with a native AUDIO output
+- New **audio** request type with current TTS models (e.g. `elevenlabs/eleven-v4`, Gemini TTS, OpenAI TTS, Seed Audio)
+- Voice picker filled from each model's `supported_voices`, verified before the paid request
+- Voice cloning (up to 3 audio references), single image reference, multi-speaker turns, delivery instructions, speed, and mp3/pcm output format
+- Model modality (`output_modalities: speech`) is verified before submitting; `@preset/` models skip verification as usual
 
 ### 10/1/2026 - Image, Video and Audio Updates
 
@@ -44,12 +52,12 @@ Multiple image inputs are supported. Make sure the model you are using supports 
 ### 9/5/2025 - Added image support for nano-banana and future image models
 
 ### 6/12/2025 - Chat Mode
-Added a new Chat Mode feature that lets you store context to enable conversations with LLMs. When you enable chat mode, the node remembers your conversation history and maintains context between messages. Your chats are automatically saved in timestamped folders, so you can pick up where you left off if you come back within an hour. After that, it'll start a fresh conversation. Each chat session is stored as a JSON file with a friendly name based on your first message. Just toggle "chat_mode" 
+Added a new Chat Mode feature that lets you store context to enable conversations with LLMs. When you enable chat mode, the node remembers your conversation history and maintains context between messages. Your chats are automatically saved in timestamped folders, so you can pick up where you left off if you come back within an hour. After that, it'll start a fresh conversation. Each chat session is stored as a JSON file with a friendly name based on your first message. Just toggle "chat_mode"
 
 ## Features
 
 - Current chat, image, and supported video models from OpenRouter's catalogs
-- Support for multiple image inputs (up to 10 images) 
+- Support for multiple image inputs (up to 10 images)
 - **Image generation** - Dedicated OpenRouter Image API with current image models and supported settings
 - Dynamic image input visibility - additional inputs appear as you connect images
 - PDF support with multiple OCR engine options
@@ -61,6 +69,7 @@ Added a new Chat Mode feature that lets you store context to enable conversation
 - **Chat Mode** - Maintain conversation context across multiple messages with automatic session management
 - **Video generation** - Text, first frame, first/last frames, and image references with a native VIDEO output
 - **Audio input** - Connect Load Audio to the optional audio_data input in chat mode
+- **Audio output (TTS)** - Text-to-speech with voice selection, voice cloning, image references, and multi-speaker scripts via the audio request type
 - **Background catalogs** - Model lists refresh without blocking ComfyUI
 
 ## Installation
@@ -125,7 +134,8 @@ To keep your API key secure, use one of the following methods:
 - **request_type**: `chat` (default), `image`, or `video`. Existing workflows default to chat.
 - **service_tier**: `auto` omits the override; `default`, `flex`, `priority`, and `ultrafast` explicitly request a chat service tier. Cheapest/fastest routing remains separate. Availability and pricing vary: models without flex endpoints use standard rates, while capacity errors on existing flex endpoints do not fall back to standard. Priority/ultrafast can fall back to standard. The returned tier appears in Stats. See [OpenRouter service tiers](https://openrouter.ai/docs/guides/features/service-tiers).
 - **image_quality / image_background**: Image API controls filtered using the selected model's published capabilities. `auto` leaves the choice to the provider. Unsupported explicit settings fail before submission. GPT-5.4 Image2 does not advertise 1K/2K/4K resolution controls.
-- **audio_data**: One native ComfyUI AUDIO clip, connected from Load Audio. Mono/stereo only; native audio is encoded as PCM16 WAV. Programmatic callers may also provide `{filename, bytes, format?}`. Empty data, unknown formats, unsupported batches/channels, and invalid samples are rejected. The selected chat model must support audio input; formats vary by provider.
+- **audio_data**: One native ComfyUI AUDIO clip, connected from Load Audio, or a file loaded via **OpenRouter Load Audio File** (see below). Mono/stereo only. Native AUDIO is encoded as PCM16 WAV; if that WAV would exceed ~15 MB (long clips/full songs), it is automatically MP3-compressed instead to avoid a 413 from OpenRouter. Programmatic callers may also provide `{filename, bytes, format?}` directly. Empty data, unknown formats, unsupported batches/channels, and invalid samples are rejected. The selected chat model must support audio input; formats vary by provider.
+- **audio_encoding**: `auto` (default; WAV unless it would exceed ~15 MB, then MP3), `wav` (always WAV, even for large clips — risks a 413 on very long audio), or `mp3` (always MP3, skipping the WAV build entirely). Only applies to native AUDIO input; raw `{filename, bytes}` input (including **OpenRouter Load Audio File**) is always sent unmodified regardless of this setting. Prefer `mp3` if you routinely feed long clips (e.g. full songs) through the built-in Load Audio node.
 - **video_mode**: `text_to_video` (no images), `first_frame` (one image), `first_last_frame` (two images), or `reference_images` (model-supported references). Connect one image per numbered input.
 - **video_duration / video_resolution**: `auto` or a value supported by the chosen video model. Video uses the shared aspect-ratio and seed controls where supported.
 - **video_generate_audio**: Request generated sound when the video model supports it.
@@ -205,6 +215,24 @@ Stopping ComfyUI or reaching the local timeout does not necessarily cancel the r
 
 Connect **Load Audio → audio_data**, select an audio-capable chat model, and enter an instruction such as “describe this audio.” One mono/stereo clip is accepted per run. Audio is only supported in chat mode.
 
+For long clips (e.g. full songs of several minutes), prefer the **OpenRouter Load Audio File** node instead of the built-in Load Audio: it sends the original file bytes unmodified (no decode/re-encode roundtrip), so an existing MP3 reaches OpenRouter exactly as small as it already is, with no quality loss and no extra encoding time. The built-in Load Audio node only outputs a decoded waveform, which this node must then re-encode (WAV, or MP3 if the WAV would be too large) before upload.
+
+### Audio Output (Text-to-Speech)
+
+1. Set **request_type** to `audio` and select a TTS model (e.g. `elevenlabs/eleven-v4`).
+2. Enter the text to synthesize in the prompt field.
+3. Choose a **tts_voice** from the dropdown (filled from the model's supported voices after selecting a model; `auto` omits the voice — models without a default voice then fail locally with their voice list) and **tts_format** (`auto`/`mp3`/`pcm`).
+4. Connect **audio** to Save Audio / Preview Audio and run the workflow.
+
+Optional capabilities, verified against OpenRouter's TTS docs before submission:
+
+- **Voice cloning**: connect one reference clip (up to 3 are supported by some models, e.g. Seed Audio) to **tts_reference_audio**. Requests carrying references route only to endpoints that support cloning. Address multiple clips in the prompt with `@Audio1`, `@Audio2`, `@Audio3`. A connected **tts_reference_text** is sent as the clip's transcript.
+- **Image reference**: connect one image to **tts_reference_image** for voice-design models. Cannot be combined with audio references.
+- **Multi-speaker**: fill **tts_speakers** with one JSON turn per line, e.g. `{"text": "Hi Jane!", "voice": "Kore"}` - currently supported by Gemini TTS models. Turns without a voice inherit **tts_voice**.
+- **Instructions** (Gemini/OpenAI TTS) and **tts_speed** (OpenAI TTS) control delivery; other providers ignore or reject them, and the error surfaces before anything is saved.
+
+The speech model list comes from OpenRouter's `output_modalities=speech` filter. As with other media, model voices are checked against the catalog before the request; `@preset/` model IDs skip verification. The decoded waveform appears on the new **audio** output (AUDIO type); mp3/pcm responses are decoded via PyAV.
+
 ### Chat Mode
 
 The Chat Mode feature allows you to maintain conversation context across multiple messages, enabling more natural and coherent conversations with the LLM.
@@ -212,7 +240,7 @@ The Chat Mode feature allows you to maintain conversation context across multipl
 #### How Chat Mode Works:
 
 1. **Enable Chat Mode**: Toggle the "chat_mode" option to True
-2. **Automatic Session Management**: 
+2. **Automatic Session Management**:
    - Sessions are automatically created when you start a conversation
    - If you send another message within 1 hour, it continues the same session
    - After 1 hour of inactivity, a new session is created
@@ -267,7 +295,7 @@ python manage_chats.py clean -d 30
 
 MIT License
 
-Copyright (c) 2024 
+Copyright (c) 2024
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -289,5 +317,5 @@ SOFTWARE.
 
 ## Credits
 
-- [OpenRouter](https://openrouter.ai/) 
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 
+- [OpenRouter](https://openrouter.ai/)
+- [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
