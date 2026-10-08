@@ -83,7 +83,20 @@ app.registerExtension({
                 let idx = 0;
                 let slot_tracker = {};
                 let toRemove = [];
-                
+
+                // The trailing placeholder must be the last *image* slot, not the
+                // last entry in this.inputs overall - other optional sockets (pdf_data,
+                // audio_data, audio_encoding, ...) can legitimately follow the image
+                // slots, and comparing against the array's absolute length here used
+                // to misidentify (and remove) connected/legitimate image slots.
+                let lastImageIdx = -1;
+                for (let i = this.inputs.length - 1; i >= 0; i--) {
+                    if (isImageSlot(this.inputs[i].name)) {
+                        lastImageIdx = i;
+                        break;
+                    }
+                }
+
                 for(const slot of this.inputs) {
                     // Skip non-image inputs
                     if (!isImageSlot(slot.name)) {
@@ -91,8 +104,8 @@ app.registerExtension({
                         continue;
                     }
                     
-                    // Mark empty image slots for removal (except the last one)
-                    if (slot.link == null && idx < this.inputs.length - 1) {
+                    // Mark empty image slots for removal (except the trailing placeholder)
+                    if (slot.link == null && idx !== lastImageIdx) {
                         toRemove.push(idx);
                     } else if (slot.link != null) {
                         // Connected slot - update its name with proper index

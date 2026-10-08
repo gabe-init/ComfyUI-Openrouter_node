@@ -133,6 +133,17 @@ class OpenRouterNode:
                 "pdf_data": (PDF_DATA_TYPE,), # Use '*' and check structure in generate_response
                 "user_message_input": ("STRING", {"forceInput": True}),
                 "audio_data": ("AUDIO",),
+                "audio_encoding": (["auto", "wav", "mp3"], {
+                    "default": "auto",
+                    "tooltip": (
+                        "How native AUDIO (e.g. from Load Audio) is encoded for upload.\n"
+                        "auto: WAV, switches to MP3 only above ~15 MB.\n"
+                        "wav: always WAV (lossless, but risks a 413 error on long clips).\n"
+                        "mp3: always MP3 (smallest/fastest; recommended for full songs).\n"
+                        "Ignored for raw file bytes (e.g. OpenRouter Load Audio File), which "
+                        "are always sent unmodified."
+                    ),
+                }),
                 "request_type": (["chat", "image", "video"], {"default": "chat"}),
                 "service_tier": (["auto", "default", "flex", "priority", "ultrafast"], {"default": "auto"}),
                 "image_quality": (["auto", "low", "medium", "high"], {"default": "auto"}),
@@ -261,7 +272,7 @@ class OpenRouterNode:
         if unique_id is None:
             return
         try:
-            from server import PromptServer
+            from server import PromptServer  # type: ignore[reportMissingImports]
             server = PromptServer.instance
             server.send_sync("openrouter.video_job", {"node_id": str(unique_id), "job_id": job_id},
                              sid=getattr(server, "client_id", None))
@@ -323,7 +334,7 @@ class OpenRouterNode:
                           web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                           request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
                           pdf_data=None, user_message_input=None, reasoning_effort="auto",
-                          audio_data=None, request_type="chat", service_tier="auto",
+                          audio_data=None, audio_encoding="auto", request_type="chat", service_tier="auto",
                           image_quality="auto", image_background="auto", video_mode="text_to_video",
                           video_duration="auto", video_resolution="auto", video_generate_audio=False,
                           video_wait_timeout=900, video_job_id="", unique_id=None, **kwargs):
@@ -352,21 +363,31 @@ class OpenRouterNode:
                     capabilities = self._chat_capabilities(model)
                 except ValueError as error:
                     if audio_data is not None or has_images or image_controls:
-                        raise ValueError("Cannot verify the selected chat model's media capabilities. Refresh models before submitting audio, images, or image settings.") from error
+                        # Preset model IDs (@preset/...) are valid on OpenRouter but
+                        # absent from public discovery, so their modalities cannot be
+                        # verified. Let them through instead of blocking paid workflows.
+                        if not str(model).startswith("@preset/"):
+                            raise ValueError("Cannot verify the selected chat model's media capabilities. Refresh models before submitting audio, images, or image settings.") from error
                     capabilities = {}  # Plain custom chat IDs may be absent from discovery.
                 architecture = capabilities.get("architecture") or {}
-                inputs = architecture.get("input_modalities")
-                for modality, present in (("audio", audio_data is not None), ("image", has_images)):
-                    if present and not isinstance(inputs, list):
-                        raise ValueError(f"Cannot verify whether the selected chat model accepts {modality} input.")
-                    if present and modality not in inputs:
-                        raise ValueError(f"The selected chat model does not support {modality} input")
-                if image_controls and "image" not in architecture.get("output_modalities", []):
-                    raise ValueError("The selected chat model does not advertise image output for these image settings.")
+                inputs = architecture.get("input_modalities") or []
+                if not capabilities:
+                    # Unverified model (e.g. @preset/... absent from discovery):
+                    # modalities cannot be checked, so submit and let the
+                    # provider reject unsupported input instead of blocking.
+                    print(f"Warning: Skipping modality verification for '{model}' (not in discovery catalog).")
+                else:
+                    for modality, present in (("audio", audio_data is not None), ("image", has_images)):
+                        if present and not isinstance(inputs, list):
+                            raise ValueError(f"Cannot verify whether the selected chat model accepts {modality} input.")
+                        if present and modality not in inputs:
+                            raise ValueError(f"The selected chat model does not support {modality} input")
+                    if image_controls and "image" not in architecture.get("output_modalities", []):
+                        raise ValueError("The selected chat model does not advertise image output for these image settings.")
                 audio_content = None
                 if audio_data is not None:
                     from .openrouter_audio import prepare_audio
-                    audio_content = prepare_audio(audio_data)["block"]
+                    audio_content = prepare_audio(audio_data, encoding=audio_encoding)["block"]
                 result = self._generate_chat(
                     key, system_prompt, user_message_box, model, web_search, cheapest, fastest,
                     temperature, pdf_engine, chat_mode, request_timeout=timeout,
@@ -437,7 +458,7 @@ class OpenRouterNode:
                 # A None VIDEO causes a misleading error in downstream SaveVideo
                 # and caches the failed generation as a successful node result.
                 failure = RuntimeError(f"OpenRouter video error: {message}")
-                failure.openrouter_job_id = self.last_video_job_id
+                setattr(failure, "openrouter_job_id", self.last_video_job_id)
                 raise failure from None
             return (f"Error: {message}", placeholder, "Stats N/A due to error", "Credits N/A due to error", None)
 
@@ -885,7 +906,7 @@ class OpenRouterNode:
                    web_search, cheapest, fastest, temperature, pdf_engine, chat_mode,
                    request_timeout=120, aspect_ratio="auto", image_resolution="1K", seed=0,
                    pdf_data=None, user_message_input=None, reasoning_effort="auto",
-                   audio_data=None, request_type="chat", service_tier="auto",
+                   audio_data=None, audio_encoding="auto", request_type="chat", service_tier="auto",
                    image_quality="auto", image_background="auto", video_mode="text_to_video",
                    video_duration="auto", video_resolution="auto", video_generate_audio=False,
                    video_wait_timeout=900, video_job_id="", **kwargs):
@@ -956,25 +977,104 @@ class OpenRouterNode:
         # Use primitive types where possible for reliable hashing/comparison
         # Note: api_key here is the UI value only. Keys resolved from the LLM_KEY
         # env var or openrouter_api_key.json are intentionally NOT part of the
-        # cache key â€” they're treated as user environment, not workflow inputs.
+        # cache key ├óÔé¼ÔÇØ they're treated as user environment, not workflow inputs.
         audio_hash = None
         if audio_data is not None:
             from .openrouter_audio import audio_fingerprint
-            audio_hash = audio_fingerprint(audio_data)
+            audio_hash = audio_fingerprint(audio_data, encoding=audio_encoding)
         return (hashlib.sha256(api_key.encode()).hexdigest(), system_prompt, user_message_box, model,
                 web_search, cheapest, fastest, temp_float, pdf_engine, chat_mode,
                 timeout_int, aspect_ratio, image_resolution, seed, validated_reasoning_effort,
-                tuple(image_hashes), pdf_hash, user_message_input, audio_hash, request_type, service_tier,
+                tuple(image_hashes), pdf_hash, user_message_input, audio_hash, audio_encoding, request_type, service_tier,
                 image_quality, image_background, video_mode, video_duration, video_resolution,
                 video_generate_audio, video_wait_timeout, video_job_id)
+
+
+class OpenRouterLoadAudioFile:
+    """Loads an audio file's raw bytes unmodified, so OpenRouter receives the
+    original compressed file (e.g. a full MP3 song) instead of a decoded
+    waveform that would otherwise have to be re-encoded (and inflate in size)
+    before upload. Prefer this over the built-in Load Audio node for long clips.
+    """
+
+    DESCRIPTION = (
+        "Loads an audio file from ComfyUI's input folder as raw, unmodified bytes "
+        "(no decode/re-encode roundtrip), for the OpenRouter node's audio_data input.\n\n"
+        "The built-in Load Audio node decodes the file to a waveform, which then has "
+        "to be re-encoded (as WAV, or MP3 for long clips) before upload - inflating "
+        "size and, if re-encoded as MP3, adding a second lossy compression pass. This "
+        "node instead sends the original file exactly as-is: smaller, faster, and "
+        "lossless. Recommended for long clips such as full songs."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        import folder_paths  # type: ignore[reportMissingImports]
+        from .openrouter_audio import _EXTENSION_FORMATS
+        input_dir = folder_paths.get_input_directory()
+        os.makedirs(input_dir, exist_ok=True)
+        files = [
+            f for f in os.listdir(input_dir)
+            if os.path.isfile(os.path.join(input_dir, f))
+            and f.rsplit(".", 1)[-1].lower() in _EXTENSION_FORMATS
+        ]
+        return {
+            "required": {
+                "audio": (sorted(files), {
+                    "audio_upload": True,
+                    "tooltip": "Audio file from ComfyUI's input folder, sent to OpenRouter unmodified.",
+                }),
+            },
+            "optional": {
+                # Declared here (not just injected by our JS) so this key exists before
+                # Comfy.UploadAudio's frontend hook appends "upload" - that widget looks
+                # up "audioUI" by name at construction time and crashes if it isn't
+                # built yet, which depends on object key order.
+                # Must be optional: its DOM widget has serialize=false, so it is never
+                # present in a submitted prompt - as required, backend validation fails
+                # with "Required input is missing: audioUI" on every run.
+                "audioUI": ("AUDIO_UI", {}),
+            },
+        }
+
+    RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio_data",)
+    FUNCTION = "load"
+    CATEGORY = "LLM"
+
+    def load(self, audio):
+        import folder_paths  # type: ignore[reportMissingImports]
+        path = folder_paths.get_annotated_filepath(audio)
+        with open(path, "rb") as f:
+            data = f.read()
+        return ({"filename": os.path.basename(audio), "bytes": data},)
+
+    @classmethod
+    def IS_CHANGED(cls, audio):
+        import folder_paths  # type: ignore[reportMissingImports]
+        path = folder_paths.get_annotated_filepath(audio)
+        hasher = hashlib.sha256()
+        with open(path, "rb") as f:
+            hasher.update(f.read())
+        return hasher.hexdigest()
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, audio):
+        import folder_paths  # type: ignore[reportMissingImports]
+        if not folder_paths.exists_annotated_filepath(audio):
+            return f"Invalid audio file: {audio}"
+        return True
+
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
     "OpenRouterNode": OpenRouterNode,
-    "openrouter_node": OpenRouterNode
+    "openrouter_node": OpenRouterNode,
+    "OpenRouterLoadAudioFile": OpenRouterLoadAudioFile,
 }
 
 # Node display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "OpenRouterNode": "OpenRouter LLM Node (Text/Multi-Image/PDF/Chat)" # Updated name
+    "OpenRouterNode": "OpenRouter LLM Node (Text/Multi-Image/PDF/Chat)", # Updated name
+    "OpenRouterLoadAudioFile": "OpenRouter Load Audio File",
 }

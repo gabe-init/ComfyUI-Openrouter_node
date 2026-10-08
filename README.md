@@ -125,7 +125,8 @@ To keep your API key secure, use one of the following methods:
 - **request_type**: `chat` (default), `image`, or `video`. Existing workflows default to chat.
 - **service_tier**: `auto` omits the override; `default`, `flex`, `priority`, and `ultrafast` explicitly request a chat service tier. Cheapest/fastest routing remains separate. Availability and pricing vary: models without flex endpoints use standard rates, while capacity errors on existing flex endpoints do not fall back to standard. Priority/ultrafast can fall back to standard. The returned tier appears in Stats. See [OpenRouter service tiers](https://openrouter.ai/docs/guides/features/service-tiers).
 - **image_quality / image_background**: Image API controls filtered using the selected model's published capabilities. `auto` leaves the choice to the provider. Unsupported explicit settings fail before submission. GPT-5.4 Image2 does not advertise 1K/2K/4K resolution controls.
-- **audio_data**: One native ComfyUI AUDIO clip, connected from Load Audio. Mono/stereo only; native audio is encoded as PCM16 WAV. Programmatic callers may also provide `{filename, bytes, format?}`. Empty data, unknown formats, unsupported batches/channels, and invalid samples are rejected. The selected chat model must support audio input; formats vary by provider.
+- **audio_data**: One native ComfyUI AUDIO clip, connected from Load Audio, or a file loaded via **OpenRouter Load Audio File** (see below). Mono/stereo only. Native AUDIO is encoded as PCM16 WAV; if that WAV would exceed ~15 MB (long clips/full songs), it is automatically MP3-compressed instead to avoid a 413 from OpenRouter. Programmatic callers may also provide `{filename, bytes, format?}` directly. Empty data, unknown formats, unsupported batches/channels, and invalid samples are rejected. The selected chat model must support audio input; formats vary by provider.
+- **audio_encoding**: `auto` (default; WAV unless it would exceed ~15 MB, then MP3), `wav` (always WAV, even for large clips — risks a 413 on very long audio), or `mp3` (always MP3, skipping the WAV build entirely). Only applies to native AUDIO input; raw `{filename, bytes}` input (including **OpenRouter Load Audio File**) is always sent unmodified regardless of this setting. Prefer `mp3` if you routinely feed long clips (e.g. full songs) through the built-in Load Audio node.
 - **video_mode**: `text_to_video` (no images), `first_frame` (one image), `first_last_frame` (two images), or `reference_images` (model-supported references). Connect one image per numbered input.
 - **video_duration / video_resolution**: `auto` or a value supported by the chosen video model. Video uses the shared aspect-ratio and seed controls where supported.
 - **video_generate_audio**: Request generated sound when the video model supports it.
@@ -204,6 +205,8 @@ Stopping ComfyUI or reaching the local timeout does not necessarily cancel the r
 ### Audio Input
 
 Connect **Load Audio → audio_data**, select an audio-capable chat model, and enter an instruction such as “describe this audio.” One mono/stereo clip is accepted per run. Audio is only supported in chat mode.
+
+For long clips (e.g. full songs of several minutes), prefer the **OpenRouter Load Audio File** node instead of the built-in Load Audio: it sends the original file bytes unmodified (no decode/re-encode roundtrip), so an existing MP3 reaches OpenRouter exactly as small as it already is, with no quality loss and no extra encoding time. The built-in Load Audio node only outputs a decoded waveform, which this node must then re-encode (WAV, or MP3 if the WAV would be too large) before upload.
 
 ### Chat Mode
 
