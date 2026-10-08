@@ -6,7 +6,7 @@ const old = JSON.parse(fs.readFileSync(new URL("../examples/chat_mode_example.js
 const before = structuredClone(old);
 migrateWorkflow(old);
 const node = old.nodes.find(n => n.type === "OpenRouterNode");
-assert.deepEqual(node.outputs.map(o => o.name), ["Output", "image", "Stats", "Credits", "video"]);
+assert.deepEqual(node.outputs.map(o => o.name), ["Output", "image", "Stats", "Credits", "video", "audio"]);
 assert.equal(old.links.find(l => l[0] === 2)[2], 2);
 assert.equal(node.widgets_values[WIDGET_NAMES.indexOf("temperature")], before.nodes[0].widgets_values[7]);
 assert.equal(node.widgets_values[WIDGET_NAMES.indexOf("chat_mode")], true);
@@ -45,24 +45,40 @@ for (const [tail, expected] of [
 // openrouter_widget_names/openrouter_schema_version) must not keep using that
 // stale cache once WIDGET_NAMES changes - it must be recomputed, not shifted.
 {
-    const v2Names = WIDGET_NAMES.filter(name => name !== "audio_encoding");
+    const v2Names = WIDGET_NAMES.filter(name => name !== "audio_encoding" && !name.startsWith("tts_"));
     const v2Values = v2Names.map(name => ({
         request_type: "image", service_tier: "flex", image_quality: "high",
     })[name] ?? (name === "model" ? "example/model" : name === "temperature" ? 1 : "auto"));
     const stale = {nodes: [{id: 1, type: "OpenRouterNode", widgets_values: v2Values,
-        outputs: ["Output", "image", "Stats", "Credits", "video"].map(name => ({name})),
+        outputs: ["Output", "image", "Stats", "Credits", "video", "audio"].map(name => ({name})),
         properties: {openrouter_widget_names: v2Names, openrouter_schema_version: 2}}], links: []};
     migrateWorkflow(stale);
     const values = stale.nodes[0].widgets_values;
     assert.equal(values[WIDGET_NAMES.indexOf("request_type")], "image", "stale cache must not shift request_type");
     assert.equal(values[WIDGET_NAMES.indexOf("service_tier")], "flex", "stale cache must not shift service_tier");
     assert.equal(values[WIDGET_NAMES.indexOf("audio_encoding")], "auto", "missing field falls back to its default");
+    assert.equal(values[WIDGET_NAMES.indexOf("tts_voice")], "auto", "tts widgets default on migrated v2 nodes");
+    assert.equal(values[WIDGET_NAMES.indexOf("tts_speakers")], "");
+}
+
+// A v3 node (audio_encoding but no tts_* widgets) must migrate without shifting.
+{
+    const v3Names = WIDGET_NAMES.filter(name => !name.startsWith("tts_"));
+    const v3Values = v3Names.map(name => (name === "request_type" ? "video" : name === "tts_speed_placeholder" ? null : name === "model" ? "m" : "auto"));
+    const v3 = {nodes: [{id: 1, type: "OpenRouterNode", widgets_values: v3Values,
+        outputs: ["Output", "image", "Stats", "Credits", "video", "audio"].map(name => ({name})),
+        properties: {openrouter_widget_names: v3Names, openrouter_schema_version: 3}}], links: []};
+    migrateWorkflow(v3);
+    const values = v3.nodes[0].widgets_values;
+    assert.equal(values[WIDGET_NAMES.indexOf("request_type")], "video", "v3 cache must not shift request_type");
+    assert.equal(values[WIDGET_NAMES.indexOf("tts_speed")], 1.0, "v3 nodes gain tts_speed default");
+    assert.equal(values[WIDGET_NAMES.indexOf("tts_instructions")], "", "v3 nodes gain tts_instructions default");
 }
 
 // configure() (recreate/undo/copy-paste) never goes through beforeConfigureGraph -
 // migrateNodeWidgets must be safe to call directly on the plain info object too.
 {
-    const v2Names = WIDGET_NAMES.filter(name => name !== "audio_encoding");
+    const v2Names = WIDGET_NAMES.filter(name => name !== "audio_encoding" && !name.startsWith("tts_"));
     const v2Values = v2Names.map(name => (name === "request_type" ? "video" : name === "model" ? "x" : "auto"));
     const info = {widgets_values: v2Values, properties: {openrouter_widget_names: v2Names, openrouter_schema_version: 2}};
     migrateNodeWidgets(info);
@@ -76,7 +92,18 @@ assert(!visibleInMode("system_prompt", "image"));
 assert(visibleInMode("video_duration", "video"));
 assert(!visibleInMode("video_duration", "video", true));
 assert(visibleInMode("video_job_id", "video", true));
+assert(visibleInMode("tts_voice", "audio"));
+assert(visibleInMode("tts_speakers", "audio"));
+assert(visibleInMode("user_message_box", "audio"), "the prompt becomes the speech input");
+assert(visibleInMode("model", "audio"), "the model dropdown stays available to pick a TTS model");
+assert(!visibleInMode("aspect_ratio", "audio"));
+assert(!visibleInMode("image_resolution", "audio"));
+assert(!visibleInMode("seed", "audio"));
+assert(!visibleInMode("tts_voice", "chat"));
+assert(!visibleInMode("system_prompt", "audio"));
+assert(!visibleInMode("video_duration", "audio"));
 assert.deepEqual(modelOptions({video: [{id: "new"}]}, "video", "saved"), ["saved", "new"]);
+assert.deepEqual(modelOptions({speech: [{id: "elevenlabs/eleven-v4"}]}, "speech", "saved"), ["saved", "elevenlabs/eleven-v4"]);
 
 const live = {widgets: WIDGET_NAMES.map(name => ({name, value: name === "api_key" ? "secret" : "auto"}))};
 live.widgets.find(w => w.name === "control_after_generate").options = {serialize: false};
@@ -115,7 +142,9 @@ const api = {addEventListener(name, callback) { listeners.set(name, callback); }
         {id: "google/gemini-3.1-flash-image-preview", architecture: {output_modalities: ["text", "image"]}}],
     image: [{id: "image/model", supported_parameters: {resolution: {values: ["1024x1024"]}}},
         {id: "openai/gpt-5.4-image-2", supported_parameters: {aspect_ratio: {values: ["1:1", "16:9", "auto"]}}},
-        {id: "google/gemini-3.1-flash-image-preview", supported_parameters: {resolution: {values: ["512", "1K", "2K", "4K"]}}}], video: [],
+        {id: "google/gemini-3.1-flash-image-preview", supported_parameters: {resolution: {values: ["512", "1K", "2K", "4K"]}}}],
+    video: [],
+    speech: [{id: "elevenlabs/eleven-v4", architecture: {output_modalities: ["speech"]}, supported_voices: ["george", "sarah", "adam"]}],
 })})};
 const controlsSource = fs.readFileSync(new URL("../web/openrouter_controls.js", import.meta.url), "utf8");
 new Function("app", "api", "NODE_IDS", "migrateWorkflow", "visibleInMode", "modelOptions", "scrubSerializedKey",
@@ -133,6 +162,7 @@ class FakeNode {
         this.size = [400, 400];
         this.graph = {setDirtyCanvas() {}, change() {}, getNodeById: id => String(id) === String(this.id) ? this : null};
     }
+    addInput(name, type) { (this.inputs ||= []).push({name, type, link: null}); }
     addWidget(type, name, value, callback, options) {
         const widget = {type, name, value, callback, options};
         this.widgets.push(widget);
@@ -141,13 +171,31 @@ class FakeNode {
     computeSize() { return [400, 400]; }
     setSize(value) { this.size = value; }
 }
-await controls.beforeRegisterNodeDef(FakeNode, {name: "OpenRouterNode"});
+await controls.beforeRegisterNodeDef(FakeNode, {name: "OpenRouterNode", input: {optional: {
+    pdf_data: ["*"],
+    user_message_input: ["STRING", {forceInput: true}],
+    audio_data: ["AUDIO"],
+    tts_reference_audio: ["AUDIO"],
+    tts_reference_image: ["IMAGE"],
+    tts_reference_text: ["STRING", {forceInput: true}],
+    request_type: [["chat", "image", "video", "audio"], {default: "chat"}],
+}}});
 const controlled = new FakeNode();
+controlled.inputs = [{name: "audio_data", type: "AUDIO", link: 7}];
 app.graph = controlled.graph;
 controlled.onNodeCreated();
 controls.setup();
 await new Promise(resolve => setImmediate(resolve));
 const widget = name => controlled.widgets.find(w => w.name === name);
+// A node saved before the TTS update gains the missing optional input sockets
+// on configure; existing sockets and widget-strings are not duplicated.
+controlled.onConfigure();
+const inputNames = (controlled.inputs || []).map(input => input.name);
+for (const name of ["pdf_data", "user_message_input", "tts_reference_audio", "tts_reference_image", "tts_reference_text"]) {
+    assert.ok(inputNames.includes(name), `configure() must add missing socket ${name}`);
+}
+assert.equal(inputNames.filter(name => name === "audio_data").length, 1, "existing sockets are not duplicated");
+assert.equal(inputNames.filter(name => name === "request_type").length, 0, "combo widgets get no socket");
 assert.equal(widget("Refresh Models").serialize, false);
 assert.equal(widget("Refresh Models").options.serialize, false);
 assert.equal(widget("Resume Last Video").serialize, false);
@@ -203,6 +251,33 @@ assert.equal(widget("Resume Last Video").options.hidden, false);
 widget("Resume Last Video").callback();
 assert.equal(widget("video_job_id").value, "video-job_1");
 assert.equal(widget("video_mode").options.hidden, true);
+
+// Audio mode exposes the tts widgets and fills voices from the speech catalog.
+widget("video_job_id").value = "";
+widget("video_job_id").callback();
+widget("request_type").value = "audio";
+widget("request_type").callback();
+widget("model").value = "elevenlabs/eleven-v4";
+widget("model").callback();
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(widget("tts_voice").options.values, ["auto", "george", "sarah", "adam"]);
+assert.equal(widget("tts_format").options.hidden, false);
+assert.equal(widget("tts_speakers").options.hidden, false);
+assert.equal(widget("system_prompt").options.hidden, true);
+assert.equal(widget("video_mode").options.hidden, true);
+assert.equal(widget("aspect_ratio").options.hidden, true, "image controls have no effect on TTS");
+assert.equal(widget("image_resolution").options.hidden, true);
+assert.equal(widget("temperature").options.hidden, true);
+// A custom voice on a model without metadata survives the next refresh.
+widget("model").value = "@preset/my-tts";
+widget("model").callback();
+assert.ok(widget("tts_voice").options.values.includes("auto"), "preset models keep the auto voice");
+widget("request_type").value = "chat";
+widget("request_type").callback();
+assert.equal(widget("tts_voice").options.hidden, true);
+// Return to video before the recovery assertions that follow.
+widget("request_type").value = "video";
+widget("request_type").callback();
 widget("video_job_id").value = "";
 widget("video_job_id").callback();
 videoJob({node_id: 42, job_id: "video-job_2"});

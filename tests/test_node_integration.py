@@ -34,12 +34,21 @@ class NodeIntegrationTests(unittest.TestCase):
         self.module.requests.post.return_value = response
 
     def test_existing_output_positions_and_new_optional_inputs(self):
-        self.assertEqual(self.node.RETURN_TYPES, ("STRING", "IMAGE", "STRING", "STRING", "VIDEO"))
+        self.assertEqual(self.node.RETURN_TYPES, ("STRING", "IMAGE", "STRING", "STRING", "VIDEO", "AUDIO"))
+        self.assertEqual(self.node.RETURN_NAMES, ("Output", "image", "Stats", "Credits", "video", "audio"))
         schema = self.node.INPUT_TYPES()
         self.assertEqual(list(schema["required"]), ["api_key", "system_prompt", "user_message_box", "model",
             "web_search", "cheapest", "fastest", "aspect_ratio", "image_resolution", "reasoning_effort",
             "seed", "temperature", "pdf_engine", "chat_mode", "request_timeout"])
         self.assertEqual(schema["optional"]["request_type"][1]["default"], "chat")
+        self.assertEqual(schema["optional"]["request_type"][0], ["chat", "image", "video", "audio"])
+        self.assertIn("tts_voice", schema["optional"])
+        # Reference inputs must exist in the schema: sockets are instantiated
+        # from it at node creation, and missing declarations mean missing slots.
+        for name, kind in (("tts_reference_audio", "AUDIO"), ("tts_reference_image", "IMAGE"),
+                           ("tts_reference_text", "STRING")):
+            self.assertIn(name, schema["optional"], f"{name} must be declared as an input")
+            self.assertEqual(schema["optional"][name][0], kind)
         self.assertEqual(schema["hidden"], {"unique_id": "UNIQUE_ID"})
 
     def test_explicit_tier_does_not_replace_cheapest_routing(self):
@@ -183,6 +192,12 @@ class NodeIntegrationTests(unittest.TestCase):
         for name in ("seed", "request_type", "service_tier", "video_mode", "request_timeout"):
             self.assertNotIn(name, parameters)
 
+    def test_tts_voice_bypasses_static_combo_validation(self):
+        # The widget ships with only ["auto"]; the frontend fills voices from
+        # the speech catalog after load. A saved "george" must not be rejected
+        # against the stale snapshot - the live check runs at execution time.
+        self.assertIn("tts_voice", inspect.signature(self.node.VALIDATE_INPUTS).parameters)
+
     def test_null_chat_content_returns_a_string(self):
         self.module.requests.post.return_value.json.return_value = {
             "choices": [{"message": {"content": None}}], "usage": {},
@@ -300,6 +315,116 @@ class NodeIntegrationTests(unittest.TestCase):
         text = self.node._safe_error(ValueError('test-key data:image/png;base64,AAAA'), "test-key")
         self.assertNotIn("test-key", text)
         self.assertNotIn("AAAA", text)
+
+
+class TtsIntegrationTests(unittest.TestCase):
+    """The audio request_type routes through openrouter_tts, not chat/completions."""
+
+    def setUp(self):
+        self.module = load_node_module()
+        self.package = self.module.__package__
+        catalog = types.ModuleType(f"{self.package}.openrouter_catalog")
+        catalog.get_model = Mock(return_value={})
+        catalog.get_catalog = Mock(return_value={"chat": [], "image": [], "video": [], "speech": []})
+        catalog.require_model = Mock(return_value={"supported_parameters": {}, "architecture": {
+            "output_modalities": ["speech"], "input_modalities": ["text"],
+        }, "supported_voices": ["george"]})
+        catalog_patch = patch.dict(sys.modules, {catalog.__name__: catalog})
+        catalog_patch.start()
+        self.addCleanup(catalog_patch.stop)
+        self.node = self.module.OpenRouterNode()
+        self.node.fetch_credits = Mock(return_value="Remaining: $1.000")
+        self.node.count_tokens = Mock(return_value=1)
+        self.args = dict(api_key="test-key", system_prompt="system", user_message_box="hello",
+                         model="example/tts", web_search=False, cheapest=False, fastest=False,
+                         temperature=1, pdf_engine="auto", chat_mode=False, request_type="audio")
+        import torch as real_torch
+        waveform = real_torch.zeros((1, 1, 4))
+        self.audio_dict = {"waveform": waveform, "sample_rate": 24000}
+
+    def tts_module(self, result=None, side_effect=None):
+        module = types.ModuleType(f"{self.package}.openrouter_tts")
+        module.generate_speech = Mock(return_value=result or (self.audio_dict, "gen-1"))
+        if side_effect:
+            module.generate_speech.side_effect = side_effect
+        return module
+
+    def test_audio_mode_calls_tts_and_returns_audio_output(self):
+        tts = self.tts_module()
+        with patch.dict(sys.modules, {tts.__name__: tts}):
+            result = self.node.generate_response(**self.args, tts_voice="george", tts_format="mp3")
+        self.assertEqual(tts.generate_speech.call_args.args[:3], ("test-key", "example/tts", "hello"))
+        kwargs = tts.generate_speech.call_args.kwargs
+        self.assertEqual(kwargs["voice"], "george")
+        self.assertEqual(kwargs["response_format"], "mp3")
+        self.assertEqual(result[0], "audio | model=example/tts | generation=gen-1")
+        self.assertIs(result[5], self.audio_dict)
+        self.module.requests.post.assert_not_called()
+
+    def test_audio_mode_parses_speaker_turns_json(self):
+        tts = self.tts_module()
+        turns = '{"text": "Hi Jane", "voice": "Kore"}\n\n{"text": "Hey"}'
+        with patch.dict(sys.modules, {tts.__name__: tts}):
+            self.node.generate_response(**self.args, tts_speakers=turns)
+        self.assertEqual(tts.generate_speech.call_args.kwargs["speaker_turns"],
+                         [{"text": "Hi Jane", "voice": "Kore"}, {"text": "Hey"}])
+
+    def test_audio_error_stops_graph_instead_of_returning_none_audio(self):
+        tts = self.tts_module(side_effect=RuntimeError("declined"))
+        with patch.dict(sys.modules, {tts.__name__: tts}):
+            with self.assertRaisesRegex(RuntimeError, "OpenRouter audio error: declined"):
+                self.node.generate_response(**self.args)
+        tts.generate_speech.assert_called_once()
+
+    def test_audio_mode_invalid_speaker_json_fails_before_request(self):
+        tts = self.tts_module()
+        with patch.dict(sys.modules, {tts.__name__: tts}):
+            with self.assertRaisesRegex(RuntimeError, "speaker turn"):
+                self.node.generate_response(**self.args, tts_speakers="{not json")
+        tts.generate_speech.assert_not_called()
+
+    def test_audio_mode_rejects_chat_media_and_multi_images(self):
+        tts = self.tts_module()
+        with patch.dict(sys.modules, {tts.__name__: tts}):
+            for kwargs in ({"pdf_data": {"bytes": b"pdf"}}, {"audio_data": {}}, {"image_1": object(), "image_2": object()}):
+                with self.subTest(kwargs=list(kwargs)):
+                    with self.assertRaisesRegex(RuntimeError, "audio_data|Multiple image"):
+                        self.node.generate_response(**{**self.args, **kwargs})
+        tts.generate_speech.assert_not_called()
+        self.module.requests.post.assert_not_called()
+
+    def test_audio_mode_passes_reference_audio_and_image(self):
+        tts = self.tts_module()
+        import torch as real_torch
+        reference = {"waveform": real_torch.zeros((1, 1, 2)), "sample_rate": 16000}
+        image = real_torch.zeros((1, 8, 8, 3))
+        with patch.dict(sys.modules, {tts.__name__: tts}), patch.object(
+                self.module.OpenRouterNode, "image_to_base64", return_value="AAAA"):
+            self.node.generate_response(**self.args, tts_reference_audio=reference, tts_reference_image=image)
+        kwargs = tts.generate_speech.call_args.kwargs
+        self.assertEqual(kwargs["reference_audio"], [reference])
+        self.assertEqual(kwargs["reference_image"], "data:image/png;base64,AAAA")
+
+    def test_audio_cache_includes_tts_settings_and_reference_fingerprint(self):
+        audio = types.ModuleType(f"{self.package}.openrouter_audio")
+        audio.audio_fingerprint = Mock(return_value="clip-fingerprint")
+        base = dict(self.args, tts_voice="george", tts_format="mp3", tts_speed=1.5,
+                    tts_reference_audio={"bytes": b"clip"})
+        with patch.dict(sys.modules, {audio.__name__: audio}):
+            first = self.node.IS_CHANGED(**base)
+            same = self.node.IS_CHANGED(**base)
+            changed = self.node.IS_CHANGED(**{**base, "tts_voice": "sarah"})
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, changed)
+        self.assertNotIn("test-key", repr(first))
+
+    def test_audio_mode_returns_none_audio_on_null_response(self):
+        # Defensive: a None waveform from the TTS module must raise, never
+        # reach PreviewAudio as a successful cached None.
+        tts = self.tts_module(result=(None, "gen-1"))
+        with patch.dict(sys.modules, {tts.__name__: tts}):
+            with self.assertRaisesRegex(RuntimeError, "no usable audio"):
+                self.node.generate_response(**self.args)
 
 
 if __name__ == "__main__":

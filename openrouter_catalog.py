@@ -17,6 +17,7 @@ CATALOG_URLS = {
     "chat": f"{API_BASE}/models",
     "image": f"{API_BASE}/images/models",
     "video": f"{API_BASE}/videos/models",
+    "speech": f"{API_BASE}/models?output_modalities=speech",
 }
 CACHE_SECONDS = 15 * 60
 FAILURE_BACKOFF_SECONDS = 30
@@ -42,7 +43,7 @@ _endpoint_inflight = set()
 
 def _validate_kind(kind):
     if kind not in CATALOG_URLS:
-        raise ValueError("Catalog kind must be chat, image, or video.")
+        raise ValueError("Catalog kind must be chat, image, video, or speech.")
 
 
 def _snapshot():
